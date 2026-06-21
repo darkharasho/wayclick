@@ -10,13 +10,14 @@ use std::{
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
 
-mod global_shortcuts;
 
 use wayclick_input::{
     ClickConfig, ClickEngine, ClickKind, ClosedLoopPositioner, CursorReader, HoldController,
     HoldTarget, Keycode, KwinCursorReader, MouseButton, Repeat, StopFlag, Target, VirtualKeyboard,
     VirtualMouse,
 };
+
+mod portal_hotkey;
 
 /// Configuration sent from the UI for one run.
 #[derive(Debug, Clone, Deserialize)]
@@ -162,6 +163,13 @@ fn stop(state: State<AppState>) -> Result<(), String> {
 #[tauri::command]
 fn is_running(state: State<AppState>) -> bool {
     state.0.lock().unwrap().handle.is_some()
+}
+
+/// The hotkey trigger the portal bound (e.g. "F6"), or null if unbound. Queried
+/// by the UI on load so it shows the binding even if it mounted after the bind.
+#[tauri::command]
+fn hotkey_status() -> Option<String> {
+    portal_hotkey::HOTKEY.lock().unwrap().clone()
 }
 
 /// First-run permission state for `/dev/uinput`.
@@ -321,28 +329,14 @@ fn cancel_pick(app: AppHandle) {
 }
 
 fn main() {
-    // WebKitGTK's DMABUF renderer fails to allocate GBM buffers on some
-    // Wayland/GPU setups (gamescope sessions especially), freezing the webview.
-    // Setting the env var from main() is too late for the packaged build — GTK
-    // reads it before this runs — so re-exec ourselves once with it set, so the
-    // value is present in the environment from process start.
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        use std::os::unix::process::CommandExt;
-        let exe = std::env::current_exe().expect("resolve current exe");
-        let mut cmd = std::process::Command::new(exe);
-        cmd.args(std::env::args_os().skip(1))
-            .env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
-        // The packaged AppImage's launcher forces GDK_BACKEND=x11, and that
-        // XWayland render path freezes the webview on some GPU/compositor setups
-        // (notably gamescope sessions). Prefer native Wayland when available —
-        // the dev build runs it fine.
-        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-            cmd.env("GDK_BACKEND", "wayland");
-        }
-        let err = cmd.exec();
-        eprintln!("wayclick: failed to re-exec with display env: {err}");
-        std::process::exit(1);
-    }
+    // Native Wayland: WebKit's DMABUF renderer fails to allocate GBM buffers on
+    // some GPU setups, so disable it (set before GTK init).
+    std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+
+    // Give the GlobalShortcuts portal a stable app id (systemd scope for KDE,
+    // GIO_LAUNCHED_DESKTOP_FILE for GNOME, + a user .desktop). Re-launches the
+    // process, so it must run before any D-Bus init.
+    portal_hotkey::establish_identity();
 
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
@@ -352,6 +346,7 @@ fn main() {
             start,
             stop,
             is_running,
+            hotkey_status,
             open_shortcut_settings,
             access_status,
             grant_access,
@@ -360,12 +355,9 @@ fn main() {
             cancel_pick
         ])
         .setup(|app| {
-            // Register the system-wide hotkey via the portal (Wayland-correct).
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = global_shortcuts::run(handle).await {
-                    eprintln!("global shortcut portal unavailable: {e}");
-                }
+                portal_hotkey::run(handle).await;
             });
             Ok(())
         })

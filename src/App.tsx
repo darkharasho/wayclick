@@ -74,7 +74,8 @@ export default function App() {
     localStorage.setItem("wc.advancedOpen", advanced ? "1" : "0");
   }, [advanced]);
   const [phase, setPhase] = useState<Phase>("idle");
-  const [hotkey] = useState("F6");
+  // The trigger the portal/compositor bound (e.g. "F6"), or null if unbound.
+  const [hotkey, setHotkey] = useState<string | null>(null);
   const [capturing, setCapturing] = useState<"key" | null>(null);
   const [update, setUpdate] = useState<{ version: string; obj: any } | null>(null);
   const [access, setAccess] = useState<Access | null>(null);
@@ -88,6 +89,19 @@ export default function App() {
       );
   }
   useEffect(checkAccess, []);
+
+  // The portal binds asynchronously, so query the current hotkey on load (and
+  // shortly after) in case the bound event fired before this mounted.
+  useEffect(() => {
+    const poll = () =>
+      invoke<string | null>("hotkey_status")
+        .then((v) => v && setHotkey(v))
+        .catch(() => {});
+    poll();
+    const t = setTimeout(poll, 1500);
+    return () => clearTimeout(t);
+  }, []);
+
 
   const actionRef = useRef(action);
   actionRef.current = action;
@@ -132,6 +146,8 @@ export default function App() {
       })
     );
     unlistens.push(listen("hotkey:toggle", () => toggle()));
+    unlistens.push(listen<string>("hotkey:bound", (e) => setHotkey(e.payload)));
+    unlistens.push(listen("hotkey:unbound", () => setHotkey(null)));
     unlistens.push(
       listen<[number, number]>("point:picked", (e) => setFixed([e.payload[0], e.payload[1]]))
     );
@@ -303,7 +319,11 @@ export default function App() {
                 <div className="sub">
                   every <b>{intervalMs} ms</b>
                   <br />
-                  {running ? "press hotkey to stop" : `press ${hotkey} to start`}
+                  {running
+                    ? "running…"
+                    : hotkey
+                    ? `press ${hotkey} to start`
+                    : "press Start to begin"}
                 </div>
               </>
             )}
@@ -314,7 +334,7 @@ export default function App() {
         <button className="primary" onClick={toggle}>
           {!running && <span className="tri" />}
           {running ? (action === "hold" ? "Release" : "Stop") : "Start"}
-          <span className="k">{hotkey}</span>
+          {hotkey && <span className="k">{hotkey}</span>}
         </button>
 
         {/* common options */}
@@ -509,12 +529,18 @@ export default function App() {
             <div className="row">
               <div className="nm">
                 Hotkey
-                <small>system-wide · toggles start/stop</small>
+                <small>
+                  {hotkey
+                    ? "toggles start/stop, system-wide"
+                    : "assign a key in your shortcut settings"}
+                </small>
               </div>
               <div className="pick">
-                <span className="kc">{hotkey}</span>
+                <span className="kc" style={hotkey ? undefined : { opacity: 0.4 }}>
+                  {hotkey ?? "—"}
+                </span>
                 <button className="setk" onClick={() => invoke("open_shortcut_settings")}>
-                  Settings
+                  {hotkey ? "Change" : "Set"}
                 </button>
               </div>
             </div>
