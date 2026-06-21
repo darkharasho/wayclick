@@ -1,0 +1,618 @@
+:root {
+  --ink: #0b0c10;
+  --surf: #13151b;
+  --surf2: #1a1d25;
+  --line: #252934;
+  --text: #e9ebf0;
+  --mut: #7c8392;
+  --dim: #565c69;
+  --steel: #8298ad;
+  --live: #ff9a3c;
+  --live-soft: #ffb968;
+  --tick: #2c323d;
+  --ui: "Onest", system-ui, sans-serif;
+  --ro: "Martian Mono", ui-monospace, monospace;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: var(--ink);
+  color: var(--text);
+  font-family: var(--ui);
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+/* ---------- title bar ---------- */
+.titlebar {
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.tb-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+}
+.tb-brand .mk {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--steel);
+  opacity: 0.8;
+}
+.app[data-phase="running"] .tb-brand .mk,
+.app[data-phase="holding"] .tb-brand .mk,
+.app[data-phase="arming"] .tb-brand .mk {
+  background: var(--live);
+  animation: beat 1.6s ease-in-out infinite;
+}
+@keyframes beat {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(255, 154, 60, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 0 5px rgba(255, 154, 60, 0);
+  }
+}
+.tb-brand b {
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+.tb-brand b i {
+  font-style: normal;
+  color: var(--mut);
+}
+.tb-tag {
+  font-family: var(--ro);
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  color: var(--dim);
+  text-transform: uppercase;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 3px 6px;
+  margin-left: 8px;
+}
+.tb-ctrls {
+  display: flex;
+  gap: 2px;
+}
+.tb-btn {
+  width: 30px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border: none;
+  background: transparent;
+  color: var(--mut);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.tb-btn:hover {
+  background: var(--surf2);
+  color: var(--text);
+}
+.tb-btn.close:hover {
+  background: #c0392b;
+  color: #fff;
+}
+
+/* ---------- body ---------- */
+.body {
+  padding: 14px;
+  overflow-y: auto;
+  height: calc(100% - 38px);
+}
+
+/* ---------- cadence (signature) ---------- */
+.cad {
+  position: relative;
+  height: 108px;
+  background: linear-gradient(180deg, #14161d, #101218);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.cad .ticks {
+  position: absolute;
+  inset: 0;
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--tick) 0 1.5px,
+    transparent 1.5px 20px
+  );
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.cad .mid {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 38px;
+  height: 1px;
+  background: var(--line);
+}
+.cad .play {
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  background: var(--live);
+  box-shadow: 0 0 16px 3px rgba(255, 154, 60, 0.7);
+  left: 4%;
+  display: none;
+}
+.app[data-phase="running"] .cad .play {
+  display: block;
+  animation: sweep var(--sweep, 1.6s) linear infinite;
+}
+@keyframes sweep {
+  0% {
+    left: 4%;
+  }
+  100% {
+    left: 96%;
+  }
+}
+/* hold morph: solid sustained bar */
+.cad .sustain {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  top: 30px;
+  height: 14px;
+  border-radius: 7px;
+  background: linear-gradient(90deg, var(--live-soft), var(--live));
+  box-shadow: 0 0 22px 2px rgba(255, 154, 60, 0.45);
+  display: none;
+}
+.app[data-mode="hold"] .cad .ticks,
+.app[data-mode="hold"] .cad .mid {
+  opacity: 0;
+}
+.app[data-mode="hold"][data-phase="holding"] .cad .sustain {
+  display: block;
+  animation: breathe 2s ease-in-out infinite;
+}
+.app[data-mode="hold"]:not([data-phase="holding"]) .cad .sustain {
+  display: block;
+  background: #232a33;
+  box-shadow: none;
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 0.92;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+.cad .state {
+  position: absolute;
+  left: 14px;
+  top: 12px;
+  font-family: var(--ro);
+  font-size: 9.5px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--mut);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cad .state .ld {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--steel);
+}
+.app[data-phase="running"] .cad .state,
+.app[data-phase="holding"] .cad .state {
+  color: var(--live);
+}
+.app[data-phase="running"] .cad .state .ld,
+.app[data-phase="holding"] .cad .state .ld {
+  background: var(--live);
+}
+.cad .read {
+  position: absolute;
+  left: 14px;
+  bottom: 11px;
+  right: 14px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+.cad .big {
+  font-family: var(--ro);
+  font-weight: 500;
+  font-size: 27px;
+  line-height: 1;
+  letter-spacing: -0.01em;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.cad .big span.u {
+  font-size: 12px;
+  color: var(--mut);
+  margin-left: 4px;
+}
+.cad .big .lab {
+  font-size: 12px;
+  color: var(--mut);
+  font-weight: 500;
+}
+.kc {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 34px;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid #3a4250;
+  border-bottom-width: 3px;
+  background: #1c2029;
+  font-family: var(--ro);
+  font-size: 16px;
+  color: var(--text);
+}
+.cad .sub {
+  font-family: var(--ro);
+  font-size: 10.5px;
+  color: var(--dim);
+  letter-spacing: 0.04em;
+  text-align: right;
+}
+.cad .sub b {
+  color: var(--steel);
+  font-weight: 500;
+}
+
+/* ---------- primary button ---------- */
+.primary {
+  margin-top: 12px;
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  padding: 14px;
+  cursor: pointer;
+  font-family: var(--ui);
+  font-weight: 700;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  background: #e7ecf1;
+  color: var(--ink);
+}
+.primary .tri {
+  width: 0;
+  height: 0;
+  border-left: 9px solid currentColor;
+  border-top: 6px solid transparent;
+  border-bottom: 6px solid transparent;
+}
+.primary .k {
+  font-family: var(--ro);
+  font-size: 10px;
+  font-weight: 500;
+  background: rgba(11, 12, 16, 0.14);
+  border-radius: 5px;
+  padding: 2px 6px;
+  letter-spacing: 0.04em;
+}
+.app[data-phase="running"] .primary,
+.app[data-phase="holding"] .primary,
+.app[data-phase="arming"] .primary {
+  background: var(--live);
+  color: #1a0f02;
+}
+
+/* ---------- option list ---------- */
+.list {
+  background: var(--surf);
+  border: 1px solid var(--line);
+  border-radius: 13px;
+  margin-top: 12px;
+  padding: 2px 14px;
+}
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 50px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--line);
+  gap: 12px;
+}
+.row:last-child {
+  border-bottom: none;
+}
+.row .nm {
+  font-size: 13px;
+  font-weight: 500;
+}
+.row .nm small {
+  display: block;
+  font-size: 11px;
+  color: var(--dim);
+  margin-top: 3px;
+  font-weight: 400;
+}
+.field {
+  display: flex;
+  gap: 6px;
+}
+.cell {
+  width: 44px;
+  text-align: center;
+  background: var(--surf2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 0 3px;
+}
+.cell input {
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--ro);
+  font-size: 15px;
+  text-align: center;
+  outline: none;
+}
+.cell u {
+  display: block;
+  font-size: 8px;
+  color: var(--dim);
+  text-decoration: none;
+  letter-spacing: 0.1em;
+  margin-top: 3px;
+  text-transform: uppercase;
+}
+.seg {
+  display: flex;
+  background: var(--surf2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 2px;
+}
+.seg button {
+  font-family: var(--ro);
+  font-size: 11px;
+  color: var(--mut);
+  padding: 6px 11px;
+  border-radius: 6px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  border: none;
+  background: transparent;
+}
+.seg button.on {
+  background: #23303b;
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px #2f4250;
+}
+.pick {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.setk {
+  font-family: var(--ro);
+  font-size: 11px;
+  color: var(--steel);
+  background: var(--surf2);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+}
+.setk.capturing {
+  color: var(--live);
+  border-color: var(--live);
+}
+
+/* ---------- disclosure + footer ---------- */
+.disc {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 15px 2px 0;
+  color: var(--mut);
+  cursor: pointer;
+  font-family: var(--ro);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  background: none;
+  border: none;
+  width: 100%;
+}
+.disc .ln {
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+.foot {
+  margin-top: 14px;
+  text-align: center;
+  font-family: var(--ro);
+  font-size: 10px;
+  color: var(--dim);
+  letter-spacing: 0.06em;
+}
+.foot b {
+  color: var(--mut);
+  font-weight: 500;
+}
+
+/* ---------- grant-access gate ---------- */
+.gate {
+  height: calc(100% - 38px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 28px 30px;
+}
+.gate-mark {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 46px;
+  margin-bottom: 22px;
+}
+.gate-mark span {
+  width: 7px;
+  height: 20px;
+  border-radius: 4px;
+  background: var(--steel);
+  opacity: 0.5;
+}
+.gate-mark span.tall {
+  height: 44px;
+  background: var(--live);
+  opacity: 1;
+}
+.gate h1 {
+  font-size: 19px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.gate p {
+  margin-top: 10px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--mut);
+  max-width: 280px;
+}
+.gate-btn {
+  margin-top: 22px;
+  border: none;
+  border-radius: 11px;
+  padding: 12px 22px;
+  cursor: pointer;
+  font-family: var(--ui);
+  font-weight: 700;
+  font-size: 14px;
+  background: #e7ecf1;
+  color: var(--ink);
+}
+.gate-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.gate-note {
+  margin-top: 16px;
+  font-size: 11px;
+  color: var(--dim);
+  max-width: 260px;
+  line-height: 1.5;
+}
+.gate-note code {
+  font-family: var(--ro);
+  color: var(--steel);
+  font-size: 10.5px;
+}
+.gate-err {
+  margin-top: 16px;
+  font-family: var(--ro);
+  font-size: 11px;
+  color: #ff6b6b;
+  max-width: 280px;
+}
+
+/* ---------- capture overlay ---------- */
+body.is-overlay {
+  background: transparent;
+}
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 11, 14, 0.14);
+  cursor: crosshair;
+  display: grid;
+  place-items: center;
+}
+.overlay-hint {
+  font-family: var(--ro);
+  background: rgba(19, 21, 27, 0.92);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 22px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--text);
+  box-shadow: 0 12px 40px -10px rgba(0, 0, 0, 0.8);
+}
+.overlay-hint small {
+  display: block;
+  color: var(--dim);
+  font-size: 11px;
+  margin-top: 5px;
+  letter-spacing: 0.04em;
+}
+
+/* ---------- update toast ---------- */
+.toast {
+  position: fixed;
+  left: 14px;
+  right: 14px;
+  bottom: 14px;
+  background: var(--surf2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+}
+.toast .t {
+  flex: 1;
+  font-size: 12px;
+}
+.toast .t small {
+  display: block;
+  color: var(--dim);
+  font-family: var(--ro);
+  font-size: 10px;
+  margin-top: 2px;
+}
+.toast button {
+  font-family: var(--ro);
+  font-size: 11px;
+  border: none;
+  border-radius: 7px;
+  padding: 7px 10px;
+  cursor: pointer;
+  background: var(--live);
+  color: #1a0f02;
+  font-weight: 600;
+}

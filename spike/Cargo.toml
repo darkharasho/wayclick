@@ -1,0 +1,15 @@
+[package]
+name = "abs-pointer-spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# Spike only: prove a uinput device declaring EV_ABS + ABS_X/ABS_Y can land
+# the Wayland pointer on a known pixel and click there. Not product code.
+
+[dependencies]
+input-linux = "0.7.1"
+
+[[bin]]
+name = "abs-pointer-spike"
+path = "src/main.rs"

@@ -1,4 +1,7 @@
 node_modules
+/target
+**/target
+.playwright-mcp
 .env
 .env.*
 .DS_Store

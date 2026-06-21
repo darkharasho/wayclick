@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/wayclick-input", "src-tauri"]
+# `spike/` is intentionally excluded — it's throwaway feasibility code, kept for
+# reference but not part of the product build.
+exclude = ["spike"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+authors = ["darkharasho"]
+repository = "https://github.com/darkharasho/wayclick"
+
+[workspace.dependencies]
+input-linux = "0.7.1"
+thiserror = "2"
