@@ -1,9 +1,9 @@
 name: Release
 
-# Tag a version to build, sign, and publish a release with updater artifacts:
-#   git tag v0.1.0 && git push origin v0.1.0
+# Tag a version to test, build, sign, and publish a release with updater
+# artifacts:  git tag v0.1.0 && git push origin v0.1.0
 #
-# Required repository secrets (Settings -> Secrets and variables -> Actions):
+# Required repository secrets:
 #   TAURI_SIGNING_PRIVATE_KEY           contents of ~/.tauri/wayclick.key
 #   TAURI_SIGNING_PRIVATE_KEY_PASSWORD  the key password ("" if none)
 
@@ -13,7 +13,25 @@ on:
       - "v*"
 
 jobs:
+  # Gate: the release only runs if tests + typecheck pass.
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - name: Engine tests
+        run: cargo test -p wayclick-input --locked
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck frontend
+        run: npx tsc --noEmit
+
   release:
+    needs: test
     permissions:
       contents: write
     runs-on: ubuntu-22.04
@@ -40,7 +58,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
@@ -54,6 +72,6 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "wayclick ${{ github.ref_name }}"
           releaseBody: "Download the AppImage or .deb below. Existing installs update automatically."
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
