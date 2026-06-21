@@ -329,11 +329,18 @@ fn main() {
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
         use std::os::unix::process::CommandExt;
         let exe = std::env::current_exe().expect("resolve current exe");
-        let err = std::process::Command::new(exe)
-            .args(std::env::args_os().skip(1))
-            .env("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
-            .exec();
-        eprintln!("wayclick: failed to re-exec with WebKit env: {err}");
+        let mut cmd = std::process::Command::new(exe);
+        cmd.args(std::env::args_os().skip(1))
+            .env("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        // The packaged AppImage's launcher forces GDK_BACKEND=x11, and that
+        // XWayland render path freezes the webview on some GPU/compositor setups
+        // (notably gamescope sessions). Prefer native Wayland when available —
+        // the dev build runs it fine.
+        if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+            cmd.env("GDK_BACKEND", "wayland");
+        }
+        let err = cmd.exec();
+        eprintln!("wayclick: failed to re-exec with display env: {err}");
         std::process::exit(1);
     }
 
