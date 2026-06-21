@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { LogicalSize } from "@tauri-apps/api/dpi";
 import { codeToKeyName } from "./keymap";
 import GrantAccess from "./GrantAccess";
 
@@ -54,6 +55,24 @@ export default function App() {
   actionRef.current = action;
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  // Grow/shrink the window to fit content (Advanced, Hold rows, etc.) so nothing
+  // clips and there's no inner scrollbar.
+  useEffect(() => {
+    const el = rootRef.current;
+    if (!el) return;
+    let last = 0;
+    const ro = new ResizeObserver(() => {
+      const h = Math.ceil(el.getBoundingClientRect().height);
+      if (h > 0 && Math.abs(h - last) > 1) {
+        last = h;
+        win.setSize(new LogicalSize(384, h)).catch(() => {});
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   const intervalMs = useMemo(
     () => ((hr * 60 + min) * 60 + sec) * 1000 + ms,
@@ -151,7 +170,7 @@ export default function App() {
   );
 
   return (
-    <div className="app" data-phase={phase} data-mode={action}>
+    <div className="app" data-phase={phase} data-mode={action} ref={rootRef}>
       {/* title bar */}
       <div className="titlebar" data-tauri-drag-region>
         <div className="tb-brand" data-tauri-drag-region>

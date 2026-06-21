@@ -70,8 +70,14 @@ fn seed() -> u64 {
 
 /// The worker that owns the virtual devices and runs until `stop` is set.
 fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle) {
+    eprintln!(
+        "[wayclick] worker start: action={} position={:?} interval={}ms",
+        cfg.action, cfg.position, cfg.interval_ms
+    );
     let result = (|| -> wayclick_input::Result<()> {
+        eprintln!("[wayclick] creating virtual mouse…");
         let mouse = VirtualMouse::create()?;
+        eprintln!("[wayclick] mouse created; emitting running");
         emit_status(&app, "running");
 
         if cfg.action == "hold" {
@@ -113,15 +119,19 @@ fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle) {
     })();
 
     if let Err(e) = result {
+        eprintln!("[wayclick] worker ERROR: {e}");
         let _ = app.emit("engine:error", e.to_string());
     }
+    eprintln!("[wayclick] worker stopped");
     emit_status(&app, "stopped");
 }
 
 #[tauri::command]
 fn start(state: State<AppState>, app: AppHandle, config: RunConfig) -> Result<(), String> {
+    eprintln!("[wayclick] start command invoked");
     let mut running = state.0.lock().unwrap();
     if running.handle.is_some() {
+        eprintln!("[wayclick] start ignored — already running");
         return Ok(()); // already running
     }
     let stop = StopFlag::new();

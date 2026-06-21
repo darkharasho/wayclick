@@ -20,12 +20,6 @@
   box-sizing: border-box;
 }
 
-html,
-body,
-#root {
-  height: 100%;
-}
-
 body {
   background: var(--ink);
   color: var(--text);
@@ -33,6 +27,13 @@ body {
   -webkit-font-smoothing: antialiased;
   user-select: none;
   overflow: hidden;
+}
+
+/* The window auto-sizes to the content (see the ResizeObserver in App),
+   so everything flows at its natural height — no inner scrollbar. */
+.app {
+  display: flex;
+  flex-direction: column;
 }
 
 /* ---------- title bar ---------- */
@@ -117,10 +118,9 @@ body {
 }
 
 /* ---------- body ---------- */
+/* Natural height — the window resizes to fit (no inner scroll/clip). */
 .body {
   padding: 14px;
-  overflow-y: auto;
-  height: calc(100% - 38px);
 }
 
 /* ---------- cadence (signature) ---------- */
@@ -473,7 +473,7 @@ body {
 
 /* ---------- grant-access gate ---------- */
 .gate {
-  height: calc(100% - 38px);
+  min-height: 440px;
   display: flex;
   flex-direction: column;
   align-items: center;

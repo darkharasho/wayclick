@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": "npm run dev",
+    "beforeDevCommand": "npm run dev:web",
     "beforeBuildCommand": "npm run build"
   },
   "app": {
@@ -15,9 +15,9 @@
         "label": "main",
         "title": "wayclick",
         "width": 384,
-        "height": 600,
+        "height": 560,
         "minWidth": 384,
-        "minHeight": 520,
+        "minHeight": 300,
         "resizable": true,
         "decorations": false,
         "transparent": false,
