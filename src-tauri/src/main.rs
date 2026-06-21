@@ -322,10 +322,19 @@ fn cancel_pick(app: AppHandle) {
 
 fn main() {
     // WebKitGTK's DMABUF renderer fails to allocate GBM buffers on some
-    // Wayland/GPU setups, leaving a blank window. Force it off before the
-    // webview initializes unless the user already set a preference.
+    // Wayland/GPU setups (gamescope sessions especially), freezing the webview.
+    // Setting the env var from main() is too late for the packaged build — GTK
+    // reads it before this runs — so re-exec ourselves once with it set, so the
+    // value is present in the environment from process start.
     if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        use std::os::unix::process::CommandExt;
+        let exe = std::env::current_exe().expect("resolve current exe");
+        let err = std::process::Command::new(exe)
+            .args(std::env::args_os().skip(1))
+            .env("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
+            .exec();
+        eprintln!("wayclick: failed to re-exec with WebKit env: {err}");
+        std::process::exit(1);
     }
 
     tauri::Builder::default()
