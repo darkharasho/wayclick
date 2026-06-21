@@ -1,17 +1,85 @@
+<div align="center">
+
+<img src="assets/icon.png" width="104" alt="wayclick icon" />
+
 # wayclick
 
-Here's the overview of where we landed.
+**A sleek, minimal autoclicker for Linux / Wayland.**
 
-Wayclick is a sleek, minimal autoclicker for Linux/Wayland, built in Rust with Tauri as the front-end shell. The whole reason it exists is to dodge the per-use approval friction that makes xclicker annoying on Wayland — it does that by leaning on TheClicker's approach of writing input events straight to /dev/uinput, which sits below the layer where Wayland demands consent.
+Built in Rust + Tauri. Writes input events straight to `/dev/uinput`, so it works
+on Wayland without asking for permission on every use — the consent cost moves to
+a single, one-time setup.
 
-The permission cost doesn't disappear, it relocates to a one-time setup: a udev rule plus group membership granting access to /dev/uinput. That means a two-state first run — a "grant access" screen on first launch, then silence forever after. The one unavoidable wrinkle is that group membership needs a log-out/in to take effect. Designing that gate to feel calm rather than like an error dialog is most of the "sleek" feeling.
+</div>
 
-On design: "sleek minimal" is a principle, not a feature cut. Under the hood you're going for full parity with xclicker and OPAutoClicker — fixed and randomized intervals, button choice, single/double-click, finite-count vs infinite, fixed-position vs follow-cursor, and hold-to-repeat. The minimalism comes from progressive disclosure: sensible defaults up front, power features one layer down.
+---
 
-Fixed-position is the must-have that carries the most risk. It needs an absolute-capable virtual pointer (uinput ABS_X/ABS_Y, not just relative motion), and because Wayland hides the real cursor position, you can't do xclicker-style "click to capture." The answer is a fullscreen transparent Tauri overlay that grabs one click and reports its own local coordinates.
+## Why
 
-Two things stay genuinely unknown until you read TheClicker's source — I couldn't fetch it in this session, so don't build on assumptions: whether its engine is a reusable library or welded into the binary (depend vs. fork — my bet's fork), and whether its virtual device is absolute-capable or relative-only.
+Most Linux autoclickers lean on X11 input injection, which Wayland deliberately
+blocks — so on Wayland they nag for approval every time (or don't work at all).
+wayclick goes *under* that layer: it creates virtual input devices via the
+kernel's `uinput` interface. The trade is a one-time grant (a udev rule + group
+membership) instead of per-use friction. After first run, it's silent forever.
 
-So the first move in the folder, before any scaffolding, is the spike: read the repo for crate shape, where the clicking lives, the device declaration, and the license — then prove an absolute pointer lands a click on a known pixel reliably and the capture overlay reports a coordinate. If those hold, everything else is plumbing.
+## Features
 
-The locked decisions are saved to memory, so they'll carry into the session where you actually create the folder.
+- **Click or hold** — rapid clicking, or press-and-hold a key / mouse button
+- **Button choice** — left / middle / right
+- **Single or double** click
+- **Fixed or randomized** intervals (down to the millisecond) with optional jitter
+- **Finite count or infinite** ("until stopped")
+- **Follow-cursor or fixed-position** — pick a target pixel with a fullscreen overlay
+- **System-wide hotkey** (F6 by default) via the XDG GlobalShortcuts portal
+- **Auto-updates**, a calm first-run access gate, and a compact collapsible UI
+
+## Compositor support
+
+The click/hold engine is portable (any compositor that uses libinput). **Absolute
+positioning is compositor-specific**: there is no usable absolute virtual pointer
+on KWin, so wayclick reads the true cursor position from the compositor and
+converges via relative motion. This is implemented for **KWin / Plasma 6**
+(Wayland) today, behind a trait so other backends can slot in.
+
+> Note: driving input into a game running under an exclusive **gamescope** grab is
+> a separate problem and not currently supported — run wayclick against normal
+> windows.
+
+## Install
+
+Download the latest **AppImage** (or `.deb`) from the
+[Releases](https://github.com/darkharasho/wayclick/releases) page, make it
+executable, and run it:
+
+```sh
+chmod +x wayclick_*.AppImage
+./wayclick_*.AppImage
+```
+
+On first launch, wayclick walks you through the one-time access grant (a udev rule
++ adding you to the `input` group). Log out and back in once for the group to take
+effect — then you're set.
+
+## Build from source
+
+Requires Rust, Node 18+, and the Tauri Linux dependencies
+(`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `librsvg2-dev`, `patchelf`).
+
+```sh
+npm install
+npm run dev          # run the app in dev mode
+npm run tauri build  # produce an AppImage / .deb
+```
+
+## How it works
+
+- `crates/wayclick-input` — the engine (no UI deps). A `VirtualMouse` and
+  `VirtualKeyboard` over `/dev/uinput`, a `ClickEngine`, and absolute positioning
+  behind a `PointerPositioner` trait (KWin closed-loop backend).
+- `src-tauri` + `src` — the Tauri shell and React UI.
+
+## Credits & license
+
+Released under the [MIT License](LICENSE). The uinput approach was inspired by
+[TheClicker](https://github.com/konkitoman/autoclicker) (MIT) — forked in spirit,
+not in code.
