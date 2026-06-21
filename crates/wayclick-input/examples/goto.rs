@@ -39,6 +39,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(b) = button {
         mouse.click(b, Duration::from_millis(40))?;
         println!("clicked {b:?}");
+        // Keep the device alive briefly so the click fully propagates before
+        // the uinput device is torn down on drop.
+        std::thread::sleep(Duration::from_millis(600));
     }
     Ok(())
 }
