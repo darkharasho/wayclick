@@ -37,7 +37,11 @@ export default function App() {
   const [button, setButton] = useState<Button>(saved.button ?? "left");
   const [action, setAction] = useState<Action>(saved.action ?? "click");
   const [doubleClick, setDoubleClick] = useState<boolean>(saved.doubleClick ?? false);
-  const [holdKey, setHoldKey] = useState<string | null>(saved.holdKey ?? "W");
+  // null is a real value here (Mouse mode), so only default when truly absent —
+  // `?? "W"` would turn a saved Mouse selection back into holding W.
+  const [holdKey, setHoldKey] = useState<string | null>(
+    saved.holdKey === undefined ? "W" : saved.holdKey
+  );
 
   const [repeatCount, setRepeatCount] = useState<number | null>(saved.repeatCount ?? null);
   const [fixed, setFixed] = useState<[number, number] | null>(saved.fixed ?? null);
