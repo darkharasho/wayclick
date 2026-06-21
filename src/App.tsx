@@ -34,7 +34,19 @@ export default function App() {
   const [fixed, setFixed] = useState<[number, number] | null>(null);
   const [jitter, setJitter] = useState(0);
 
-  const [advanced, setAdvanced] = useState(false);
+  // Collapse states persist so a configured widget stays compact across runs.
+  const [settingsOpen, setSettingsOpen] = useState(
+    () => localStorage.getItem("wc.settingsOpen") !== "0"
+  );
+  const [advanced, setAdvanced] = useState(
+    () => localStorage.getItem("wc.advancedOpen") === "1"
+  );
+  useEffect(() => {
+    localStorage.setItem("wc.settingsOpen", settingsOpen ? "1" : "0");
+  }, [settingsOpen]);
+  useEffect(() => {
+    localStorage.setItem("wc.advancedOpen", advanced ? "1" : "0");
+  }, [advanced]);
   const [phase, setPhase] = useState<Phase>("idle");
   const [hotkey] = useState("F6");
   const [capturing, setCapturing] = useState<"key" | null>(null);
@@ -256,6 +268,13 @@ export default function App() {
         </button>
 
         {/* common options */}
+        <button className="disc" onClick={() => setSettingsOpen((s) => !s)}>
+          Settings
+          <span className="ln" />
+          {settingsOpen ? "–" : "+"}
+        </button>
+
+        {settingsOpen && (
         <div className="list">
           {action === "click" && (
             <div className="row">
@@ -338,6 +357,7 @@ export default function App() {
             />
           )}
         </div>
+        )}
 
         {/* advanced */}
         <button className="disc" onClick={() => setAdvanced((a) => !a)}>
