@@ -111,7 +111,8 @@ fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle) {
                 Some([x, y]) => Target::Fixed { x, y },
                 None => Target::FollowCursor,
             },
-            hold: Duration::from_millis(20),
+            // ≥30ms or KWin drops clicks while the pointer is moving (follow-cursor).
+            hold: Duration::from_millis(40),
             double_gap: Duration::from_millis(40),
             reposition_each_click: cfg.reposition_each_click,
         };

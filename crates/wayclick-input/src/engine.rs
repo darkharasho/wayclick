@@ -58,7 +58,8 @@ pub struct ClickConfig {
     pub jitter: Duration,
     pub repeat: Repeat,
     pub target: Target,
-    /// Button hold time within a single click.
+    /// Button hold time within a single click. Must stay above ~30ms or KWin
+    /// drops the click while the pointer is moving (see `one_click`).
     pub hold: Duration,
     /// Gap between the two presses of a double click.
     pub double_gap: Duration,
@@ -75,7 +76,7 @@ impl Default for ClickConfig {
             jitter: Duration::ZERO,
             repeat: Repeat::Infinite,
             target: Target::FollowCursor,
-            hold: Duration::from_millis(20),
+            hold: Duration::from_millis(40),
             double_gap: Duration::from_millis(40),
             reposition_each_click: false,
         }
@@ -152,6 +153,11 @@ impl<'a, P: PointerPositioner> ClickEngine<'a, P> {
     }
 
     fn one_click(&self, cfg: &ClickConfig) -> Result<()> {
+        // Press-hold-release with a real hold window. KWin only registers a click
+        // while the pointer is *moving* if press and release are separated by a
+        // non-trivial hold (~30ms+); a zero-duration atomic tap is silently
+        // dropped during motion. So the follow-cursor "click while moving" case
+        // requires `cfg.hold` to stay above that threshold.
         self.mouse.click(cfg.button, cfg.hold)?;
         if cfg.kind == ClickKind::Double {
             sleep(cfg.double_gap);
@@ -165,7 +171,9 @@ impl<'a, P: PointerPositioner> ClickEngine<'a, P> {
     pub fn run(&self, cfg: &ClickConfig, stop: &StopFlag, seed: u64) -> Result<u64> {
         let mut rng = Rng::new(seed);
 
-        // Fixed-position: assert the target once up front.
+        // Fixed-position: assert the target once up front (clicks don't move the
+        // pointer, so it stays put). Follow-cursor clicks wherever the pointer
+        // already is, so it needs no positioning.
         if let Target::Fixed { x, y } = cfg.target {
             let p = self.positioner.expect("fixed target requires a positioner");
             p.move_to(x, y)?;

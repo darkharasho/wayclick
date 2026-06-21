@@ -135,7 +135,8 @@ impl Drop for VirtualMouse {
 }
 
 fn now() -> EventTime {
-    // The kernel timestamps synthetic events; zero is fine and deterministic.
+    // uinput ignores the timeval written here — the kernel restamps every
+    // injected event with its own monotonic clock — so zero is fine.
     EventTime::new(0, 0)
 }
 
