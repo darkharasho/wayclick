@@ -458,6 +458,17 @@ body {
   height: 1px;
   background: var(--line);
 }
+.disc .sum {
+  flex: 1;
+  text-align: right;
+  color: var(--steel);
+  text-transform: none;
+  letter-spacing: 0.02em;
+  font-size: 10px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .foot {
   margin-top: 14px;
   text-align: center;

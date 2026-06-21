@@ -171,6 +171,20 @@ export default function App() {
   }
 
   const running = phase !== "idle";
+
+  // Compact "what's selected" summaries shown in each disclosure when collapsed.
+  const settingsSummary =
+    action === "hold"
+      ? `hold ${holdKey ?? button}`
+      : `${intervalMs} ms · ${button} · ${doubleClick ? "double" : "single"}`;
+  const advancedSummary = [
+    repeatCount == null ? "until stopped" : `${repeatCount}×`,
+    fixed ? `fixed ${fixed[0]},${fixed[1]}` : "follow cursor",
+    action === "click" && jitter ? `±${jitter}ms` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
   const num = (v: number, set: (n: number) => void, max: number) => (
     <input
       value={v}
@@ -270,7 +284,11 @@ export default function App() {
         {/* common options */}
         <button className="disc" onClick={() => setSettingsOpen((s) => !s)}>
           Settings
-          <span className="ln" />
+          {settingsOpen ? (
+            <span className="ln" />
+          ) : (
+            <span className="sum">{settingsSummary}</span>
+          )}
           {settingsOpen ? "–" : "+"}
         </button>
 
@@ -362,7 +380,11 @@ export default function App() {
         {/* advanced */}
         <button className="disc" onClick={() => setAdvanced((a) => !a)}>
           Advanced
-          <span className="ln" />
+          {advanced ? (
+            <span className="ln" />
+          ) : (
+            <span className="sum">{advancedSummary}</span>
+          )}
           {advanced ? "–" : "+"}
         </button>
 
@@ -462,11 +484,6 @@ export default function App() {
             </div>
           </div>
         )}
-
-        <div className="foot">
-          repeat <b>{repeatCount == null ? "until stopped" : `${repeatCount}x`}</b> · position{" "}
-          <b>{fixed ? `${fixed[0]},${fixed[1]}` : "follow cursor"}</b>
-        </div>
       </div>
       )}
 
