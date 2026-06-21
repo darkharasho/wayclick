@@ -10,7 +10,6 @@
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "core:window:allow-set-focus",
-    "global-shortcut:default",
     "process:default",
     "updater:default"
   ]

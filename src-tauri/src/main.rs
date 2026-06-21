@@ -9,7 +9,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+mod global_shortcuts;
 
 use wayclick_input::{
     ClickConfig, ClickEngine, ClickKind, ClosedLoopPositioner, CursorReader, HoldController,
@@ -231,12 +232,22 @@ usermod -aG input {user}
     }
 }
 
-/// Re-bind the global hotkey. Accepts a Tauri accelerator string like "F6".
+/// Open the system shortcut settings so the user can view/rebind the hotkey.
+/// With the portal model the compositor owns the binding, so "rebind" lives in
+/// the desktop's own settings rather than inside the app.
 #[tauri::command]
-fn set_hotkey(app: AppHandle, accelerator: String) -> Result<(), String> {
-    let gs = app.global_shortcut();
-    let _ = gs.unregister_all();
-    gs.register(accelerator.as_str()).map_err(|e| e.to_string())
+fn open_shortcut_settings() {
+    // Best-effort across desktops; KDE first.
+    for (cmd, args) in [
+        ("systemsettings", vec!["kcm_keys"]),
+        ("systemsettings5", vec!["kcm_keys"]),
+        ("kcmshell6", vec!["kcm_keys"]),
+        ("kcmshell5", vec!["kcm_keys"]),
+    ] {
+        if std::process::Command::new(cmd).args(&args).spawn().is_ok() {
+            return;
+        }
+    }
 }
 
 /// Open the fullscreen transparent overlay used to pick a fixed click point.
@@ -310,22 +321,12 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(
-            tauri_plugin_global_shortcut::Builder::new()
-                .with_handler(|app, _shortcut, event| {
-                    use tauri_plugin_global_shortcut::ShortcutState;
-                    if event.state() == ShortcutState::Pressed {
-                        let _ = app.emit("hotkey:toggle", ());
-                    }
-                })
-                .build(),
-        )
         .manage(AppState(Mutex::new(Running::default())))
         .invoke_handler(tauri::generate_handler![
             start,
             stop,
             is_running,
-            set_hotkey,
+            open_shortcut_settings,
             access_status,
             grant_access,
             pick_point,
@@ -333,8 +334,13 @@ fn main() {
             cancel_pick
         ])
         .setup(|app| {
-            // Default hotkey; the UI can rebind via set_hotkey.
-            let _ = app.global_shortcut().register("F6");
+            // Register the system-wide hotkey via the portal (Wayland-correct).
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = global_shortcuts::run(handle).await {
+                    eprintln!("global shortcut portal unavailable: {e}");
+                }
+            });
             Ok(())
         })
         .run(tauri::generate_context!())

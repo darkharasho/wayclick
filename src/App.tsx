@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { codeToKeyName, eventToAccelerator } from "./keymap";
+import { codeToKeyName } from "./keymap";
 import GrantAccess from "./GrantAccess";
 
 type Phase = "idle" | "arming" | "running" | "holding";
@@ -35,8 +35,8 @@ export default function App() {
 
   const [advanced, setAdvanced] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
-  const [hotkey, setHotkey] = useState("F6");
-  const [capturing, setCapturing] = useState<"key" | "hotkey" | null>(null);
+  const [hotkey] = useState("F6");
+  const [capturing, setCapturing] = useState<"key" | null>(null);
   const [update, setUpdate] = useState<{ version: string; obj: any } | null>(null);
   const [access, setAccess] = useState<Access | null>(null);
 
@@ -89,19 +89,10 @@ export default function App() {
     if (!capturing) return;
     const handler = (e: KeyboardEvent) => {
       e.preventDefault();
-      if (capturing === "key") {
-        const name = codeToKeyName(e);
-        if (name) {
-          setHoldKey(name);
-          setCapturing(null);
-        }
-      } else {
-        const accel = eventToAccelerator(e);
-        if (accel) {
-          setHotkey(accel);
-          invoke("set_hotkey", { accelerator: accel }).catch(() => {});
-          setCapturing(null);
-        }
+      const name = codeToKeyName(e);
+      if (name) {
+        setHoldKey(name);
+        setCapturing(null);
       }
     };
     window.addEventListener("keydown", handler, true);
@@ -421,15 +412,12 @@ export default function App() {
             <div className="row">
               <div className="nm">
                 Hotkey
-                <small>toggle start/stop</small>
+                <small>system-wide · toggles start/stop</small>
               </div>
               <div className="pick">
                 <span className="kc">{hotkey}</span>
-                <button
-                  className={"setk" + (capturing === "hotkey" ? " capturing" : "")}
-                  onClick={() => setCapturing("hotkey")}
-                >
-                  {capturing === "hotkey" ? "press keys…" : "Rebind"}
+                <button className="setk" onClick={() => invoke("open_shortcut_settings")}>
+                  Settings
                 </button>
               </div>
             </div>
