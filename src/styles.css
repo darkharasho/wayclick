@@ -112,6 +112,13 @@ body {
   background: var(--surf2);
   color: var(--text);
 }
+.tb-btn.on {
+  color: var(--live);
+}
+.tb-btn.on:hover {
+  background: var(--surf2);
+  color: var(--live);
+}
 .tb-btn.close:hover {
   background: #c0392b;
   color: #fff;

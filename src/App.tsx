@@ -19,20 +19,46 @@ type Access = {
 const win = getCurrentWindow();
 
 export default function App() {
+  // Persisted settings so config survives restarts.
+  const saved = useMemo<any>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("wc.config") || "{}");
+    } catch {
+      return {};
+    }
+  }, []);
+
   // interval pieces
-  const [hr, setHr] = useState(0);
-  const [min, setMin] = useState(0);
-  const [sec, setSec] = useState(0);
-  const [ms, setMs] = useState(100);
+  const [hr, setHr] = useState<number>(saved.hr ?? 0);
+  const [min, setMin] = useState<number>(saved.min ?? 0);
+  const [sec, setSec] = useState<number>(saved.sec ?? 0);
+  const [ms, setMs] = useState<number>(saved.ms ?? 100);
 
-  const [button, setButton] = useState<Button>("left");
-  const [action, setAction] = useState<Action>("click");
-  const [doubleClick, setDoubleClick] = useState(false);
-  const [holdKey, setHoldKey] = useState<string | null>("W");
+  const [button, setButton] = useState<Button>(saved.button ?? "left");
+  const [action, setAction] = useState<Action>(saved.action ?? "click");
+  const [doubleClick, setDoubleClick] = useState<boolean>(saved.doubleClick ?? false);
+  const [holdKey, setHoldKey] = useState<string | null>(saved.holdKey ?? "W");
 
-  const [repeatCount, setRepeatCount] = useState<number | null>(null); // null = infinite
-  const [fixed, setFixed] = useState<[number, number] | null>(null);
-  const [jitter, setJitter] = useState(0);
+  const [repeatCount, setRepeatCount] = useState<number | null>(saved.repeatCount ?? null);
+  const [fixed, setFixed] = useState<[number, number] | null>(saved.fixed ?? null);
+  const [jitter, setJitter] = useState<number>(saved.jitter ?? 0);
+
+  // Window pinned (always-on-top), persisted and applied to the window.
+  const [pinned, setPinned] = useState<boolean>(saved.pinned ?? false);
+  useEffect(() => {
+    win.setAlwaysOnTop(pinned).catch(() => {});
+  }, [pinned]);
+
+  // Save settings whenever they change.
+  useEffect(() => {
+    localStorage.setItem(
+      "wc.config",
+      JSON.stringify({
+        hr, min, sec, ms, button, action, doubleClick, holdKey,
+        repeatCount, fixed, jitter, pinned,
+      })
+    );
+  }, [hr, min, sec, ms, button, action, doubleClick, holdKey, repeatCount, fixed, jitter, pinned]);
 
   // Collapse states persist so a configured widget stays compact across runs.
   const [settingsOpen, setSettingsOpen] = useState(
@@ -207,6 +233,16 @@ export default function App() {
           <span className="tb-tag">wayland · uinput</span>
         </div>
         <div className="tb-ctrls">
+          <button
+            className={"tb-btn" + (pinned ? " on" : "")}
+            title={pinned ? "Unpin (allow behind other windows)" : "Keep on top"}
+            onClick={() => setPinned((p) => !p)}
+          >
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 17v5" />
+              <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
+            </svg>
+          </button>
           <button className="tb-btn" title="Minimize" onClick={() => win.minimize()}>
             <svg width="11" height="11" viewBox="0 0 11 11">
               <rect x="1" y="5" width="9" height="1.4" fill="currentColor" />
