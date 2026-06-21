@@ -108,6 +108,11 @@ export default function App() {
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
   const rootRef = useRef<HTMLDivElement>(null);
+  // Remember the last key so toggling Hold target Mouse→Key restores it.
+  const lastHoldKey = useRef<string>(saved.holdKey ?? "W");
+  useEffect(() => {
+    if (holdKey) lastHoldKey.current = holdKey;
+  }, [holdKey]);
 
   // Grow/shrink the window to fit content (Advanced, Hold rows, etc.) so nothing
   // clips and there's no inner scrollbar.
@@ -374,16 +379,18 @@ export default function App() {
             </div>
           )}
 
-          <Seg
-            label="Button"
-            value={button}
-            onChange={(v) => setButton(v as Button)}
-            options={[
-              ["left", "Left"],
-              ["middle", "Mid"],
-              ["right", "Right"],
-            ]}
-          />
+          {action === "click" && (
+            <Seg
+              label="Button"
+              value={button}
+              onChange={(v) => setButton(v as Button)}
+              options={[
+                ["left", "Left"],
+                ["middle", "Mid"],
+                ["right", "Right"],
+              ]}
+            />
+          )}
 
           <Seg
             label="Action"
@@ -397,26 +404,54 @@ export default function App() {
           />
 
           {action === "hold" && (
-            <div className="row">
-              <div className="nm">
-                Hold key
-                <small>press any key, or use the mouse button above</small>
-              </div>
-              <div className="pick">
-                {holdKey && <span className="kc">{holdKey}</span>}
-                <button
-                  className={"setk" + (capturing === "key" ? " capturing" : "")}
-                  onClick={() => setCapturing("key")}
-                >
-                  {capturing === "key" ? "press a key…" : "Set key"}
-                </button>
-                {holdKey && (
-                  <button className="setk" onClick={() => setHoldKey(null)}>
-                    use mouse
+            <>
+              <div className="row">
+                <div className="nm">
+                  Hold
+                  <small>a key, or a mouse button</small>
+                </div>
+                <div className="seg">
+                  <button
+                    className={holdKey !== null ? "on" : ""}
+                    onClick={() => setHoldKey(lastHoldKey.current)}
+                  >
+                    Key
                   </button>
-                )}
+                  <button
+                    className={holdKey === null ? "on" : ""}
+                    onClick={() => setHoldKey(null)}
+                  >
+                    Mouse
+                  </button>
+                </div>
               </div>
-            </div>
+
+              {holdKey !== null ? (
+                <div className="row">
+                  <div className="nm">Key</div>
+                  <div className="pick">
+                    <span className="kc">{holdKey}</span>
+                    <button
+                      className={"setk" + (capturing === "key" ? " capturing" : "")}
+                      onClick={() => setCapturing("key")}
+                    >
+                      {capturing === "key" ? "press a key…" : "Set key"}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <Seg
+                  label="Button"
+                  value={button}
+                  onChange={(v) => setButton(v as Button)}
+                  options={[
+                    ["left", "Left"],
+                    ["middle", "Mid"],
+                    ["right", "Right"],
+                  ]}
+                />
+              )}
+            </>
           )}
 
           {action === "click" && (
