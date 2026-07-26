@@ -1,6 +1,6 @@
 {
   "name": "wayclick",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "A sleek, minimal autoclicker for Linux/Wayland.",
   "type": "module",
   "scripts": {
