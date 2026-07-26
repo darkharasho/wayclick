@@ -1,290 +1,283 @@
-// Absolute-pointer spike for Wayclick.
-//
-// Proves the load-bearing unknown: can a uinput device that declares
-// EV_ABS + ABS_X/ABS_Y reposition the Wayland pointer to an ABSOLUTE pixel
-// and click there? TheClicker is relative-only, so this path is greenfield.
-//
-// Usage:
-//   abs-pointer-spike <x> <y> [--no-click] [--max-x N] [--max-y N]
-//                              [--hold-ms N] [--settle-ms N] [--register-ms N]
-//
-// Defaults map the axis range to this machine's combined desktop (6880x1440),
-// so <x> <y> are interpreted as desktop pixels.
+//! libei feasibility spike, v2: SELF-CONTAINED drag.
+//!   Q1: does a libei button HOLD register? Tested as a same-device drag —
+//!       libei moves the cursor (absolute), presses, drags, releases. If text
+//!       under the path highlights, the hold works.
+//!   Q2: absolute pointer available? (printed)
+//!   Q3: restore token for one-time consent? (printed)
+//!
+//! The cursor WILL visibly move to ~(700,500) and drag right — that's the test,
+//! not the product behavior. Put a text editor / this chat where x≈700..1300,
+//! y≈500 so there's text under the drag path.
 
-use std::{thread::sleep, time::Duration};
-
-use input_linux::{
-    AbsoluteAxis, AbsoluteEvent, AbsoluteInfo, AbsoluteInfoSetup, EventKind, EventTime, InputEvent,
-    InputId, InputProperty, Key, KeyEvent, KeyState, SynchronizeEvent, UInputHandle,
-    sys::{BUS_USB, input_event},
+use ashpd::desktop::{
+    remote_desktop::{
+        ConnectToEISOptions, DeviceType, RemoteDesktop, SelectDevicesOptions, StartOptions,
+    },
+    CreateSessionOptions, PersistMode,
+};
+use calloop::generic::Generic;
+use enumflags2::BitFlags;
+use once_cell::sync::Lazy;
+use reis::{ei, PendingRequestResult};
+use std::{
+    collections::HashMap,
+    io,
+    os::unix::net::UnixStream,
+    thread::sleep,
+    time::{Duration, Instant},
 };
 
-const VENDOR: u16 = 0x3232;
-const PRODUCT: u16 = 0x5679; // distinct from TheClicker's 0x5678
-const VERSION: u16 = 0x0001;
+const BTN_LEFT: u32 = 0x110;
 
-struct Config {
-    x: i32,
-    y: i32,
-    max_x: i32,
-    max_y: i32,
-    click: bool,
-    hold_ms: u64,
-    settle_ms: u64,
-    register_ms: u64,
-    hold_secs: u64,
-    sweep_secs: u64,
-    // device-shape experiments
-    prop_pointer: bool, // INPUT_PROP_POINTER (absolute coords map to screen as a pointer)
-    prop_direct: bool,  // INPUT_PROP_DIRECT (touchscreen-style)
-    touch: bool,        // declare BTN_TOUCH
-    pen: bool,          // declare BTN_TOOL_PEN
-    touch_click: bool,  // click using BTN_TOUCH (+ BTN_TOOL_PEN if --pen) instead of BTN_LEFT
-    no_mouse_btns: bool, // omit BTN_LEFT/RIGHT/MIDDLE so udev won't tag ID_INPUT_MOUSE
+static INTERFACES: Lazy<HashMap<&'static str, u32>> = Lazy::new(|| {
+    let mut m = HashMap::new();
+    for i in [
+        "ei_callback",
+        "ei_connection",
+        "ei_seat",
+        "ei_device",
+        "ei_pingpong",
+        "ei_pointer",
+        "ei_pointer_absolute",
+        "ei_button",
+        "ei_scroll",
+    ] {
+        m.insert(i, 1);
+    }
+    m
+});
+
+#[derive(Default)]
+struct SeatData {
+    capabilities: HashMap<String, u64>,
 }
 
-fn parse_args() -> Config {
-    let mut cfg = Config {
-        x: -1,
-        y: -1,
-        max_x: 6880,
-        max_y: 1440,
-        click: true,
-        hold_ms: 40,
-        settle_ms: 400,
-        register_ms: 1200,
-        hold_secs: 0,
-        sweep_secs: 0,
-        prop_pointer: false,
-        prop_direct: false,
-        touch: false,
-        pen: false,
-        touch_click: false,
-        no_mouse_btns: false,
-    };
-    let mut positional = Vec::new();
-    let mut args = std::env::args().skip(1);
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "--no-click" => cfg.click = false,
-            "--max-x" => cfg.max_x = args.next().unwrap().parse().unwrap(),
-            "--max-y" => cfg.max_y = args.next().unwrap().parse().unwrap(),
-            "--hold-ms" => cfg.hold_ms = args.next().unwrap().parse().unwrap(),
-            "--settle-ms" => cfg.settle_ms = args.next().unwrap().parse().unwrap(),
-            "--register-ms" => cfg.register_ms = args.next().unwrap().parse().unwrap(),
-            // --hold N: create device, sleep N secs (inspect /proc/bus/input/devices), exit.
-            "--hold" => cfg.hold_secs = args.next().unwrap().parse().unwrap(),
-            // --sweep N: slowly drag the pointer left->right across y for N secs.
-            "--sweep" => cfg.sweep_secs = args.next().unwrap().parse().unwrap(),
-            "--pointer" => cfg.prop_pointer = true,
-            "--direct" => cfg.prop_direct = true,
-            "--touch" => cfg.touch = true,
-            "--pen" => cfg.pen = true,
-            "--touch-click" => cfg.touch_click = true,
-            "--no-mouse-btns" => cfg.no_mouse_btns = true,
-            _ => positional.push(a),
+#[derive(Default)]
+struct DeviceData {
+    device_type: Option<ei::device::DeviceType>,
+    interfaces: HashMap<String, reis::Object>,
+}
+
+impl DeviceData {
+    fn interface<T: reis::Interface>(&self) -> Option<T> {
+        self.interfaces.get(T::NAME)?.clone().downcast()
+    }
+}
+
+struct State {
+    seats: HashMap<ei::Seat, SeatData>,
+    devices: HashMap<ei::Device, DeviceData>,
+    button: Option<ei::Button>,
+    abs: Option<ei::PointerAbsolute>,
+    device: Option<ei::Device>,
+    serial: u32,
+    sequence: u32,
+    t0: Instant,
+    tested: bool,
+    done: bool,
+}
+
+impl State {
+    fn micros(&self) -> u64 {
+        self.t0.elapsed().as_micros() as u64
+    }
+
+    /// Self-contained drag: move → press → drag right → release, all via libei.
+    fn run_drag(&mut self, context: &mut ei::Context) {
+        let (Some(device), Some(button), Some(abs)) =
+            (self.device.clone(), self.button.clone(), self.abs.clone())
+        else {
+            eprintln!("Q1: missing button/abs interface — cannot test");
+            self.done = true;
+            return;
+        };
+        println!("\n>>> self-contained drag at (700,500)->(1300,500) — WATCH for selection <<<\n");
+        device.start_emulating(self.serial, self.sequence);
+        self.sequence += 1;
+
+        let frame = |ctx: &mut ei::Context, t: u64| {
+            device.frame(self.serial, t);
+            let _ = ctx.flush();
+        };
+
+        abs.motion_absolute(700.0, 500.0);
+        frame(context, self.micros());
+        sleep(Duration::from_millis(200));
+
+        button.button(BTN_LEFT, ei::button::ButtonState::Press);
+        frame(context, self.micros());
+        sleep(Duration::from_millis(80));
+
+        for i in 1..=30 {
+            let x = 700.0 + i as f32 * 20.0;
+            abs.motion_absolute(x, 500.0);
+            frame(context, self.micros());
+            sleep(Duration::from_millis(25));
         }
+
+        button.button(BTN_LEFT, ei::button::ButtonState::Released);
+        frame(context, self.micros());
+        sleep(Duration::from_millis(80));
+
+        device.stop_emulating(self.serial);
+        let _ = context.flush();
+        println!("\n>>> done. Did text highlight / did a drag happen? <<<");
+        self.done = true;
     }
-    if positional.len() == 2 {
-        cfg.x = positional[0].parse().expect("x must be an integer");
-        cfg.y = positional[1].parse().expect("y must be an integer");
-    } else if cfg.hold_secs == 0 && cfg.sweep_secs == 0 {
-        eprintln!("usage: abs-pointer-spike <x> <y> [flags] | --hold N [x y] | --sweep N");
-        std::process::exit(2);
+
+    fn handle_readable(&mut self, context: &mut ei::Context) -> io::Result<calloop::PostAction> {
+        if context.read().is_err() {
+            self.done = true;
+            return Ok(calloop::PostAction::Remove);
+        }
+        while let Some(result) = context.pending_event() {
+            let request = match result {
+                PendingRequestResult::Request(r) => r,
+                PendingRequestResult::ParseError(_) => continue,
+                PendingRequestResult::InvalidObject(_) => continue,
+            };
+            match request {
+                ei::Event::Handshake(handshake, req) => match req {
+                    ei::handshake::Event::HandshakeVersion { version: _ } => {
+                        handshake.handshake_version(1);
+                        handshake.name("libei-spike");
+                        handshake.context_type(ei::handshake::ContextType::Sender);
+                        for (interface, version) in INTERFACES.iter() {
+                            handshake.interface_version(interface, *version);
+                        }
+                        handshake.finish();
+                    }
+                    ei::handshake::Event::Connection { connection: _, serial } => {
+                        self.serial = serial;
+                    }
+                    _ => {}
+                },
+                ei::Event::Connection(_c, req) => match req {
+                    ei::connection::Event::Seat { seat } => {
+                        self.seats.insert(seat, SeatData::default());
+                    }
+                    ei::connection::Event::Ping { ping } => ping.done(0),
+                    _ => {}
+                },
+                ei::Event::Seat(seat, req) => {
+                    let data = self.seats.get_mut(&seat).unwrap();
+                    match req {
+                        ei::seat::Event::Capability { mask, interface } => {
+                            data.capabilities.insert(interface, mask);
+                        }
+                        ei::seat::Event::Done => {
+                            let mut bind_mask = 0u64;
+                            for (iface, mask) in &data.capabilities {
+                                if matches!(
+                                    iface.as_str(),
+                                    "ei_pointer" | "ei_pointer_absolute" | "ei_button" | "ei_scroll"
+                                ) {
+                                    bind_mask |= mask;
+                                }
+                            }
+                            println!(
+                                "Q2: absolute pointer {}",
+                                if data.capabilities.contains_key("ei_pointer_absolute") {
+                                    "AVAILABLE"
+                                } else {
+                                    "NOT available"
+                                }
+                            );
+                            seat.bind(bind_mask);
+                        }
+                        ei::seat::Event::Device { device } => {
+                            self.devices.insert(device, DeviceData::default());
+                        }
+                        _ => {}
+                    }
+                }
+                ei::Event::Device(device, req) => {
+                    let data = self.devices.get_mut(&device).unwrap();
+                    match req {
+                        ei::device::Event::DeviceType { device_type } => {
+                            data.device_type = Some(device_type);
+                        }
+                        ei::device::Event::Interface { object } => {
+                            data.interfaces.insert(object.interface().to_owned(), object);
+                        }
+                        ei::device::Event::Done => {
+                            // Prefer the device that has BOTH button and absolute pointer.
+                            if let (Some(button), Some(abs)) =
+                                (data.interface::<ei::Button>(), data.interface::<ei::PointerAbsolute>())
+                            {
+                                println!("using device type={:?} (button + absolute)", data.device_type);
+                                self.button = Some(button);
+                                self.abs = Some(abs);
+                                self.device = Some(device.clone());
+                            }
+                        }
+                        ei::device::Event::Resumed { serial } => {
+                            self.serial = serial;
+                            if !self.tested && self.abs.is_some() {
+                                self.tested = true;
+                                self.run_drag(context);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                _ => {}
+            }
+        }
+        let _ = context.flush();
+        Ok(calloop::PostAction::Continue)
     }
-    cfg
 }
 
-fn now() -> EventTime {
-    // Wall-clock isn't required for synthetic events; zero timestamps are fine
-    // and the kernel fills them in. Keep it simple and deterministic.
-    EventTime::new(0, 0)
+async fn open_connection() -> ei::Context {
+    let rd = RemoteDesktop::new().await.unwrap();
+    let session = rd.create_session(CreateSessionOptions::default()).await.unwrap();
+    let options = SelectDevicesOptions::default()
+        .set_devices(BitFlags::from(DeviceType::Pointer))
+        .set_persist_mode(PersistMode::ExplicitlyRevoked);
+    rd.select_devices(&session, options).await.unwrap();
+    let resp = rd
+        .start(&session, None, StartOptions::default())
+        .await
+        .unwrap()
+        .response()
+        .unwrap();
+    println!("Q3: restore_token = {:?}", resp.restore_token());
+    let fd = rd.connect_to_eis(&session, ConnectToEISOptions::default()).await.unwrap();
+    ei::Context::new(UnixStream::from(fd)).unwrap()
 }
 
 fn main() {
-    let cfg = parse_args();
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let context = rt.block_on(open_connection());
+    let _handshake = context.handshake();
+    let _ = context.flush();
 
-    let file = std::fs::OpenOptions::new()
-        .write(true)
-        .open("/dev/uinput")
-        .expect("open /dev/uinput (need rw access via uaccess ACL or input group)");
+    let mut event_loop = calloop::EventLoop::<State>::try_new().unwrap();
+    let handle = event_loop.handle();
+    let source = Generic::new(context, calloop::Interest::READ, calloop::Mode::Level);
+    handle
+        .insert_source(source, |_event, context, state: &mut State| {
+            state.handle_readable(unsafe { context.get_mut() })
+        })
+        .unwrap();
 
-    let uinput = UInputHandle::new(file);
-
-    // Event types: absolute axes, keys (buttons), and sync.
-    uinput.set_evbit(EventKind::Absolute).unwrap();
-    uinput.set_evbit(EventKind::Key).unwrap();
-    uinput.set_evbit(EventKind::Synchronize).unwrap();
-
-    // Buttons.
-    if !cfg.no_mouse_btns {
-        uinput.set_keybit(Key::ButtonLeft).unwrap();
-        uinput.set_keybit(Key::ButtonRight).unwrap();
-        uinput.set_keybit(Key::ButtonMiddle).unwrap();
-    }
-    if cfg.touch {
-        uinput.set_keybit(Key::ButtonTouch).unwrap();
-    }
-    if cfg.pen {
-        uinput.set_keybit(Key::ButtonToolPen).unwrap();
-    }
-
-    // Optional input properties that change how libinput classifies the device.
-    if cfg.prop_pointer {
-        uinput.set_propbit(InputProperty::Pointer).unwrap();
-    }
-    if cfg.prop_direct {
-        uinput.set_propbit(InputProperty::Direct).unwrap();
-    }
-
-    // Absolute axes.
-    uinput.set_absbit(AbsoluteAxis::X).unwrap();
-    uinput.set_absbit(AbsoluteAxis::Y).unwrap();
-
-    let abs_info = |axis, max| AbsoluteInfoSetup {
-        axis,
-        info: AbsoluteInfo {
-            value: 0,
-            minimum: 0,
-            maximum: max,
-            fuzz: 0,
-            flat: 0,
-            resolution: 0,
-        },
+    let mut state = State {
+        seats: HashMap::new(),
+        devices: HashMap::new(),
+        button: None,
+        abs: None,
+        device: None,
+        serial: u32::MAX,
+        sequence: 0,
+        t0: Instant::now(),
+        tested: false,
+        done: false,
     };
 
-    uinput
-        .create(
-            &InputId {
-                bustype: BUS_USB,
-                vendor: VENDOR,
-                product: PRODUCT,
-                version: VERSION,
-            },
-            b"wayclick-abs-spike",
-            0,
-            &[
-                abs_info(AbsoluteAxis::X, cfg.max_x),
-                abs_info(AbsoluteAxis::Y, cfg.max_y),
-            ],
-        )
-        .expect("create uinput device");
-
-    println!(
-        "device created: range x[0..{}] y[0..{}], target ({}, {}), click={}",
-        cfg.max_x, cfg.max_y, cfg.x, cfg.y, cfg.click
-    );
-
-    // Give libinput/KWin time to enumerate the new device before we send events.
-    println!("waiting {}ms for compositor to register device...", cfg.register_ms);
-    sleep(Duration::from_millis(cfg.register_ms));
-
-    if cfg.hold_secs > 0 {
-        // For tablet/touch devices the pointer only follows while the tool is in
-        // proximity / the touch is down, so optionally hold contact during the park.
-        let contact = cfg.pen || cfg.touch_click;
-        if cfg.x >= 0 && cfg.y >= 0 {
-            if cfg.pen {
-                button(&uinput, Key::ButtonToolPen, KeyState::PRESSED);
-            }
-            move_to(&uinput, cfg.x, cfg.y);
-            if cfg.touch_click {
-                button(&uinput, Key::ButtonTouch, KeyState::PRESSED);
-            }
-            move_to(&uinput, cfg.x, cfg.y);
-            println!(
-                "parked pointer at ({}, {}){}",
-                cfg.x,
-                cfg.y,
-                if contact { " (contact held)" } else { "" }
-            );
-        }
-        println!(
-            "holding device open for {}s -- inspect now:\n  grep -A8 wayclick /proc/bus/input/devices",
-            cfg.hold_secs
-        );
-        sleep(Duration::from_secs(cfg.hold_secs));
-        if contact {
-            if cfg.touch_click {
-                button(&uinput, Key::ButtonTouch, KeyState::RELEASED);
-            }
-            if cfg.pen {
-                button(&uinput, Key::ButtonToolPen, KeyState::RELEASED);
-            }
-        }
-        let _ = uinput.dev_destroy();
-        println!("destroyed.");
-        return;
+    while !state.done {
+        event_loop.dispatch(Some(Duration::from_millis(100)), &mut state).unwrap();
     }
-
-    if cfg.sweep_secs > 0 {
-        let steps = cfg.sweep_secs * 30; // ~30 Hz
-        let y = cfg.max_y / 2;
-        println!("sweeping x[0..{}] at y={} for {}s...", cfg.max_x, y, cfg.sweep_secs);
-        for i in 0..=steps {
-            let x = (cfg.max_x as i64 * i as i64 / steps as i64) as i32;
-            move_to(&uinput, x, y);
-            sleep(Duration::from_millis(33));
-        }
-        let _ = uinput.dev_destroy();
-        println!("destroyed.");
-        return;
-    }
-
-    move_to(&uinput, cfg.x, cfg.y);
-    println!("moved to ({}, {})", cfg.x, cfg.y);
-    sleep(Duration::from_millis(cfg.settle_ms));
-
-    if cfg.click {
-        // Re-assert position right before the click so it lands where intended.
-        move_to(&uinput, cfg.x, cfg.y);
-        if cfg.touch_click {
-            // Touchscreen/tablet-style contact: tool down, touch down, ... up.
-            if cfg.pen {
-                button(&uinput, Key::ButtonToolPen, KeyState::PRESSED);
-            }
-            button(&uinput, Key::ButtonTouch, KeyState::PRESSED);
-            sleep(Duration::from_millis(cfg.hold_ms));
-            button(&uinput, Key::ButtonTouch, KeyState::RELEASED);
-            if cfg.pen {
-                button(&uinput, Key::ButtonToolPen, KeyState::RELEASED);
-            }
-        } else {
-            button(&uinput, Key::ButtonLeft, KeyState::PRESSED);
-            sleep(Duration::from_millis(cfg.hold_ms));
-            button(&uinput, Key::ButtonLeft, KeyState::RELEASED);
-        }
-        println!("clicked at ({}, {})", cfg.x, cfg.y);
-    }
-
-    sleep(Duration::from_millis(200));
-    let _ = uinput.dev_destroy();
-    println!("done.");
-}
-
-fn move_to(uinput: &UInputHandle<std::fs::File>, x: i32, y: i32) {
-    let events: [input_event; 3] = [
-        InputEvent::from(AbsoluteEvent::new(now(), AbsoluteAxis::X, x))
-            .as_raw()
-            .to_owned(),
-        InputEvent::from(AbsoluteEvent::new(now(), AbsoluteAxis::Y, y))
-            .as_raw()
-            .to_owned(),
-        InputEvent::from(SynchronizeEvent::report(now()))
-            .as_raw()
-            .to_owned(),
-    ];
-    uinput.write(&events).expect("write move events");
-}
-
-fn button(uinput: &UInputHandle<std::fs::File>, key: Key, state: KeyState) {
-    let events: [input_event; 2] = [
-        InputEvent::from(KeyEvent::new(now(), key, state))
-            .as_raw()
-            .to_owned(),
-        InputEvent::from(SynchronizeEvent::report(now()))
-            .as_raw()
-            .to_owned(),
-    ];
-    uinput.write(&events).expect("write button events");
+    let _ = event_loop.dispatch(Some(Duration::from_millis(200)), &mut state);
+    println!("\nspike done.");
 }
