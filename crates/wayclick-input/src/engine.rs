@@ -15,7 +15,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread::sleep,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -124,12 +124,14 @@ impl Rng {
     }
 }
 
-/// Compute the delay before the next click: `interval + U[0, jitter]`.
+/// Compute the delay before the next click: uniform in `[interval - jitter,
+/// interval + jitter]` (the UI presents jitter as "±"), saturating at zero.
 pub fn next_delay(interval: Duration, jitter: Duration, rng: &mut Rng) -> Duration {
     if jitter.is_zero() {
         return interval;
     }
-    interval + Duration::from_micros(rng.in_range(jitter.as_micros() as u64))
+    let offset = Duration::from_micros(rng.in_range(2 * jitter.as_micros() as u64));
+    (interval + offset).saturating_sub(jitter)
 }
 
 /// Whether the loop should continue given how many clicks have happened.
@@ -179,7 +181,12 @@ impl<'a, P: PointerPositioner> ClickEngine<'a, P> {
             p.move_to(x, y)?;
         }
 
+        // Deadline-based pacing: each tick is scheduled `delay` after the
+        // previous *deadline*, so time spent inside a click (the ≥40ms hold,
+        // double-click gap, repositioning) does not stretch the period — an
+        // interval of 100ms really means 10 clicks per second.
         let mut done: u64 = 0;
+        let mut next_tick = Instant::now();
         while should_continue(cfg.repeat, done) && !stop.is_stopped() {
             if cfg.reposition_each_click {
                 if let Target::Fixed { x, y } = cfg.target {
@@ -192,9 +199,14 @@ impl<'a, P: PointerPositioner> ClickEngine<'a, P> {
             if !should_continue(cfg.repeat, done) {
                 break;
             }
-            // Sleep in small slices so stop is responsive even on long intervals.
-            let delay = next_delay(cfg.interval, cfg.jitter, &mut rng);
-            sleep_interruptible(delay, stop);
+            next_tick += next_delay(cfg.interval, cfg.jitter, &mut rng);
+            let now = Instant::now();
+            if next_tick < now {
+                // The click itself outlasted the interval; don't accumulate a
+                // backlog of overdue ticks.
+                next_tick = now;
+            }
+            sleep_interruptible(next_tick - now, stop);
         }
         Ok(done)
     }
@@ -222,14 +234,31 @@ mod tests {
     }
 
     #[test]
-    fn jitter_stays_within_bounds() {
+    fn jitter_is_symmetric_around_base() {
         let mut rng = Rng::new(12345);
         let base = Duration::from_millis(100);
         let jitter = Duration::from_millis(50);
+        let (mut lo, mut hi) = (Duration::MAX, Duration::ZERO);
         for _ in 0..10_000 {
             let d = next_delay(base, jitter, &mut rng);
-            assert!(d >= base, "delay {d:?} below base");
+            assert!(d >= base - jitter, "delay {d:?} below base-jitter");
             assert!(d <= base + jitter, "delay {d:?} above base+jitter");
+            lo = lo.min(d);
+            hi = hi.max(d);
+        }
+        // Both halves of the ± range are actually used.
+        assert!(lo < base, "no delay ever fell below base ({lo:?})");
+        assert!(hi > base, "no delay ever rose above base ({hi:?})");
+    }
+
+    #[test]
+    fn jitter_larger_than_base_saturates_at_zero() {
+        let mut rng = Rng::new(99);
+        let base = Duration::from_millis(10);
+        let jitter = Duration::from_millis(50);
+        for _ in 0..1_000 {
+            let d = next_delay(base, jitter, &mut rng);
+            assert!(d <= base + jitter);
         }
     }
 

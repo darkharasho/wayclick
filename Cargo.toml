@@ -14,3 +14,8 @@ repository = "https://github.com/darkharasho/wayclick"
 [workspace.dependencies]
 input-linux = "0.7.1"
 thiserror = "2"
+# Same major as ashpd pulls in, so the tree compiles zbus once. Tokio flavor
+# explicitly: ashpd enables zbus/tokio anyway in the app build, and pinning it
+# here keeps standalone crate builds (examples, tests) on the same code paths.
+zbus = { version = "4", default-features = false, features = ["tokio"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }

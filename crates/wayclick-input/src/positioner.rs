@@ -32,8 +32,11 @@ pub struct LoopConfig {
     /// Max iterations before giving up (a pointer-grabbing fullscreen app can
     /// make convergence impossible).
     pub max_iters: u32,
-    /// Pause after each move so the compositor applies it before the next read.
+    /// Poll interval while waiting for the compositor to apply a move.
     pub settle: Duration,
+    /// How many settle-polls to wait for a move to become visible before
+    /// concluding it was dropped and letting the outer loop retry.
+    pub settle_polls: u32,
 }
 
 impl Default for LoopConfig {
@@ -43,6 +46,7 @@ impl Default for LoopConfig {
             max_step: 150,
             max_iters: 40,
             settle: Duration::from_millis(8),
+            settle_polls: 6,
         }
     }
 }
@@ -68,21 +72,81 @@ fn clamp(v: i32, max: i32) -> i32 {
     v.clamp(-max, max)
 }
 
+/// Divide a wanted on-screen delta by the current gain estimate, keeping at
+/// least 1 unit of motion in the right direction.
+fn descale(v: i32, gain: f64) -> i32 {
+    if v == 0 {
+        return 0;
+    }
+    let scaled = (f64::from(v) / gain).round() as i32;
+    if scaled == 0 { v.signum() } else { scaled }
+}
+
+impl<R: CursorReader> ClosedLoopPositioner<'_, R> {
+    /// Wait until the compositor shows the pointer somewhere other than
+    /// `(px, py)`, or give up after `settle_polls` polls (the move may have
+    /// been legitimately absorbed at a screen edge or by a grab). Returns the
+    /// freshest position either way.
+    fn wait_for_motion(&self, px: i32, py: i32) -> Result<(i32, i32)> {
+        let mut pos = (px, py);
+        for _ in 0..self.cfg.settle_polls.max(1) {
+            sleep(self.cfg.settle);
+            pos = self.reader.position()?;
+            if pos != (px, py) {
+                break;
+            }
+        }
+        Ok(pos)
+    }
+}
+
 impl<R: CursorReader> PointerPositioner for ClosedLoopPositioner<'_, R> {
     fn move_to(&self, tx: i32, ty: i32) -> Result<()> {
-        let mut last = (i32::MIN, i32::MIN);
-        for _ in 0..self.cfg.max_iters {
-            let (cx, cy) = self.reader.position()?;
+        // Closed loop: read, nudge, wait until the nudge is *observed*, repeat.
+        // Waiting for observed motion (rather than a fixed pause) matters: the
+        // cursor read is fast enough now that a fixed pause can race the
+        // compositor — re-sending a delta it hasn't applied yet overshoots.
+        //
+        // libinput applies velocity-dependent pointer acceleration to virtual
+        // mice, and at this loop's pace that lands near a constant ~2× (traced
+        // on KWin 6.7): sending the raw remaining delta overshoots by the same
+        // amount every time and the loop ping-pongs around the target forever.
+        // So track the observed applied/sent gain and divide each step by it.
+        let trace = std::env::var_os("WAYCLICK_POS_TRACE").is_some();
+        let mut gain = 1.0f64;
+        let (mut cx, mut cy) = self.reader.position()?;
+        for i in 0..self.cfg.max_iters {
             let (dx, dy) = (tx - cx, ty - cy);
             if dx.abs() <= self.cfg.tolerance && dy.abs() <= self.cfg.tolerance {
                 return Ok(());
             }
-            self.mouse
-                .move_relative(clamp(dx, self.cfg.max_step), clamp(dy, self.cfg.max_step))?;
-            last = (cx, cy);
-            sleep(self.cfg.settle);
+            let (px, py) = (cx, cy);
+            let (sx, sy) = (
+                clamp(descale(dx, gain), self.cfg.max_step),
+                clamp(descale(dy, gain), self.cfg.max_step),
+            );
+            self.mouse.move_relative(sx, sy)?;
+            (cx, cy) = self.wait_for_motion(px, py)?;
+
+            let (mx, my) = (cx - px, cy - py);
+            if (mx, my) != (0, 0) {
+                // Update the gain estimate from what actually happened. Ratio
+                // of magnitudes; EMA smooths accel-curve noise. Skipped when
+                // the event was swallowed (fresh device) — that says nothing
+                // about scaling.
+                let sent = f64::from(sx * sx + sy * sy).sqrt();
+                let moved = f64::from(mx * mx + my * my).sqrt();
+                if sent > 0.0 {
+                    gain = (0.5 * gain + 0.5 * (moved / sent)).clamp(0.2, 5.0);
+                }
+            }
+            if trace {
+                eprintln!(
+                    "[pos {i:02}] at ({px},{py}) sent ({sx},{sy}) now ({cx},{cy}) \
+                     gain {gain:.2} target ({tx},{ty})"
+                );
+            }
         }
-        let (x, y) = self.reader.position().unwrap_or(last);
-        Err(InputError::NotConverged { tx, ty, x, y, steps: self.cfg.max_iters })
+        Err(InputError::NotConverged { tx, ty, x: cx, y: cy, steps: self.cfg.max_iters })
     }
 }

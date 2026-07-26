@@ -57,7 +57,7 @@ impl Keycode {
     }
 }
 
-const REGISTER_SETTLE: Duration = Duration::from_millis(1200);
+const REGISTER_SETTLE: Duration = Duration::from_millis(2000);
 
 /// A virtual keyboard. Drops its uinput device on `Drop`.
 pub struct VirtualKeyboard {

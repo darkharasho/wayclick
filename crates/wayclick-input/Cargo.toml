@@ -10,6 +10,8 @@ description = "Input engine for Wayclick: virtual mouse over /dev/uinput plus co
 [dependencies]
 input-linux.workspace = true
 thiserror.workspace = true
+zbus.workspace = true
+tokio.workspace = true
 
 [[example]]
 name = "goto"

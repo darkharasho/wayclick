@@ -4535,6 +4535,8 @@ version = "0.1.0"
 dependencies = [
  "input-linux",
  "thiserror 2.0.18",
+ "tokio",
+ "zbus",
 ]
 
 [[package]]

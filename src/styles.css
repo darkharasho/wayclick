@@ -634,3 +634,10 @@ body.is-overlay {
   color: #1a0f02;
   font-weight: 600;
 }
+.toast.err {
+  border-color: #7a3b3b;
+}
+.toast.err button {
+  background: #c0564f;
+  color: #fff;
+}

@@ -35,8 +35,9 @@ impl MouseButton {
 
 /// How long to give libinput/the compositor to enumerate the device after
 /// creation before the first event is sent. Events emitted before the
-/// compositor has the device are silently dropped.
-const REGISTER_SETTLE: Duration = Duration::from_millis(1200);
+/// compositor has the device are silently dropped — traced on KWin 6.7, events
+/// were still being eaten ~1.5s after creation, so 1200ms was not enough.
+const REGISTER_SETTLE: Duration = Duration::from_millis(2000);
 
 /// A relative virtual mouse. Drops its uinput device on `Drop`.
 pub struct VirtualMouse {

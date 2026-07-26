@@ -2,7 +2,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
-    sync::Mutex,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::JoinHandle,
     time::{Duration, SystemTime},
 };
@@ -48,7 +51,45 @@ struct Running {
     handle: Option<JoinHandle<()>>,
 }
 
-struct AppState(Mutex<Running>);
+/// The long-lived virtual devices. KWin silently drops events from a freshly
+/// created uinput device until it has been enumerated (~1.2s) and its button
+/// grab warmed up, so devices are created once — ideally by the background
+/// pre-warm at launch — and kept for the app's lifetime instead of per run.
+/// Both are created together because creating a uinput device mid-run disrupts
+/// KWin's grab on a button the other device is holding.
+struct Devices {
+    mouse: VirtualMouse,
+    keyboard: VirtualKeyboard,
+}
+
+/// Settle after device creation: events sent before the compositor has
+/// enumerated the device are silently dropped (still seen ~1.5s post-create on
+/// KWin 6.7). Paid once per session, normally by the launch pre-warm.
+const DEVICE_SETTLE: Duration = Duration::from_millis(2000);
+
+#[derive(Default)]
+struct Inner {
+    running: Mutex<Running>,
+    devices: Mutex<Option<Arc<Devices>>>,
+    /// True once the mouse has delivered real click cycles this session. A
+    /// cold device needs priming clicks before KWin honors a press-and-hold.
+    warmed: AtomicBool,
+}
+
+struct AppState(Arc<Inner>);
+
+fn get_or_create_devices(inner: &Inner) -> wayclick_input::Result<Arc<Devices>> {
+    let mut guard = inner.devices.lock().unwrap();
+    if let Some(d) = guard.as_ref() {
+        return Ok(d.clone());
+    }
+    let mouse = VirtualMouse::create_no_wait()?;
+    let keyboard = VirtualKeyboard::create_no_wait()?;
+    std::thread::sleep(DEVICE_SETTLE);
+    let devices = Arc::new(Devices { mouse, keyboard });
+    *guard = Some(devices.clone());
+    Ok(devices)
+}
 
 /// What the engine is currently doing, mirrored to the UI.
 #[derive(Serialize, Clone)]
@@ -69,38 +110,54 @@ fn seed() -> u64 {
         | 1
 }
 
-/// The worker that owns the virtual devices and runs until `stop` is set.
-fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle) {
+/// The worker that borrows the long-lived devices and runs until `stop` is set.
+fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle, inner: Arc<Inner>) {
     eprintln!(
         "[wayclick] worker start: action={} position={:?} interval={}ms",
         cfg.action, cfg.position, cfg.interval_ms
     );
     let result = (|| -> wayclick_input::Result<()> {
-        eprintln!("[wayclick] creating virtual mouse…");
-        let mouse = VirtualMouse::create()?;
-        eprintln!("[wayclick] mouse created; emitting running");
+        let devices = get_or_create_devices(&inner)?;
+        let mouse = &devices.mouse;
         emit_status(&app, "running");
 
         if cfg.action == "hold" {
-            let keyboard = VirtualKeyboard::create()?;
-            let ctrl = HoldController::new(&mouse, &keyboard);
-            let target = match cfg.hold_key.as_deref().and_then(Keycode::from_name) {
-                Some(k) => HoldTarget::Key(k),
-                None => HoldTarget::Mouse(button_from(&cfg.button)),
-            };
-            ctrl.hold(target)?;
-            while !stop.is_stopped() {
-                std::thread::sleep(Duration::from_millis(40));
+            match cfg.hold_key.as_deref().and_then(Keycode::from_name) {
+                // Mouse-button hold.
+                None => {
+                    let b = button_from(&cfg.button);
+                    // KWin ignores a press-and-hold from a mouse that has never
+                    // clicked — the button grab needs warming by real click
+                    // cycles (measured: one is not enough, 3+ works). With
+                    // long-lived devices any earlier run counts, so this fires
+                    // at most once per session, not before every hold.
+                    if !inner.warmed.load(Ordering::Relaxed) {
+                        for _ in 0..5 {
+                            mouse.click(b, Duration::from_millis(40))?;
+                            std::thread::sleep(Duration::from_millis(60));
+                        }
+                        inner.warmed.store(true, Ordering::Relaxed);
+                    }
+                    mouse.press(b)?;
+                    while !stop.is_stopped() {
+                        std::thread::sleep(Duration::from_millis(40));
+                    }
+                    mouse.release(b)?;
+                }
+                // Key hold: press and hold the key on the long-lived keyboard.
+                Some(k) => {
+                    let ctrl = HoldController::new(mouse, &devices.keyboard);
+                    ctrl.hold(HoldTarget::Key(k))?;
+                    while !stop.is_stopped() {
+                        std::thread::sleep(Duration::from_millis(40));
+                    }
+                    ctrl.release(HoldTarget::Key(k))?;
+                }
             }
-            ctrl.release(target)?;
             return Ok(());
         }
 
         // Click action.
-        let reader = KwinCursorReader::new()?;
-        let positioner = ClosedLoopPositioner::new(&mouse, &reader);
-        let engine = ClickEngine::new(&mouse, Some(&positioner));
-
         let click_cfg = ClickConfig {
             button: button_from(&cfg.button),
             kind: if cfg.click_kind == "double" { ClickKind::Double } else { ClickKind::Single },
@@ -116,7 +173,20 @@ fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle) {
             double_gap: Duration::from_millis(40),
             reposition_each_click: cfg.reposition_each_click,
         };
-        engine.run(&click_cfg, &stop, seed())?;
+        // The KWin cursor reader is only needed to reach a fixed target;
+        // follow-cursor runs on any compositor.
+        let done = match cfg.position {
+            Some(_) => {
+                let reader = KwinCursorReader::new()?;
+                let positioner = ClosedLoopPositioner::new(mouse, &reader);
+                ClickEngine::new(mouse, Some(&positioner)).run(&click_cfg, &stop, seed())?
+            }
+            None => ClickEngine::<ClosedLoopPositioner<KwinCursorReader>>::new(mouse, None)
+                .run(&click_cfg, &stop, seed())?,
+        };
+        if done > 0 {
+            inner.warmed.store(true, Ordering::Relaxed);
+        }
         Ok(())
     })();
 
@@ -131,16 +201,27 @@ fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle) {
 #[tauri::command]
 fn start(state: State<AppState>, app: AppHandle, config: RunConfig) -> Result<(), String> {
     eprintln!("[wayclick] start command invoked");
-    let mut running = state.0.lock().unwrap();
-    if running.handle.is_some() {
-        eprintln!("[wayclick] start ignored — already running");
-        return Ok(()); // already running
+    let inner = &state.0;
+    let mut running = inner.running.lock().unwrap();
+    // A worker that ended on its own (finite count, engine error) leaves its
+    // handle behind; reap it so Start works again instead of silently no-oping.
+    if let Some(h) = running.handle.take() {
+        if h.is_finished() {
+            let _ = h.join();
+            running.stop = None;
+        } else {
+            eprintln!("[wayclick] start ignored — already running");
+            running.handle = Some(h);
+            return Ok(());
+        }
     }
     let stop = StopFlag::new();
     emit_status(&app, "arming");
     let worker_stop = stop.clone();
     let worker_app = app.clone();
-    let handle = std::thread::spawn(move || run_worker(config, worker_stop, worker_app));
+    let worker_inner = inner.clone();
+    let handle =
+        std::thread::spawn(move || run_worker(config, worker_stop, worker_app, worker_inner));
     running.stop = Some(stop);
     running.handle = Some(handle);
     Ok(())
@@ -149,7 +230,7 @@ fn start(state: State<AppState>, app: AppHandle, config: RunConfig) -> Result<()
 #[tauri::command]
 fn stop(state: State<AppState>) -> Result<(), String> {
     let (stop, handle) = {
-        let mut running = state.0.lock().unwrap();
+        let mut running = state.0.running.lock().unwrap();
         (running.stop.take(), running.handle.take())
     };
     if let Some(s) = stop {
@@ -163,7 +244,14 @@ fn stop(state: State<AppState>) -> Result<(), String> {
 
 #[tauri::command]
 fn is_running(state: State<AppState>) -> bool {
-    state.0.lock().unwrap().handle.is_some()
+    state
+        .0
+        .running
+        .lock()
+        .unwrap()
+        .handle
+        .as_ref()
+        .is_some_and(|h| !h.is_finished())
 }
 
 /// The hotkey trigger the portal bound (e.g. "F6"), or null if unbound. Queried
@@ -342,7 +430,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .manage(AppState(Mutex::new(Running::default())))
+        .manage(AppState(Arc::new(Inner::default())))
         .invoke_handler(tauri::generate_handler![
             start,
             stop,
@@ -356,6 +444,15 @@ fn main() {
             cancel_pick
         ])
         .setup(|app| {
+            // Pre-warm: create the virtual devices in the background so the
+            // first toggle doesn't pay the enumeration settle. Silently skipped
+            // when /dev/uinput isn't accessible yet (first-run gate).
+            let inner = app.state::<AppState>().0.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = get_or_create_devices(&inner) {
+                    eprintln!("[wayclick] device pre-warm skipped: {e}");
+                }
+            });
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 portal_hotkey::run(handle).await;

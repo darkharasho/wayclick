@@ -83,6 +83,9 @@ export default function App() {
   const [capturing, setCapturing] = useState<"key" | null>(null);
   const [update, setUpdate] = useState<{ version: string; obj: any } | null>(null);
   const [access, setAccess] = useState<Access | null>(null);
+  // Last engine failure, shown as a toast — a run that dies silently otherwise
+  // looks like the app randomly ignoring the Start button.
+  const [engineError, setEngineError] = useState<string | null>(null);
 
   function checkAccess() {
     invoke<Access>("access_status")
@@ -111,6 +114,10 @@ export default function App() {
   actionRef.current = action;
   const phaseRef = useRef(phase);
   phaseRef.current = phase;
+  // The hotkey listener is registered once ([] deps), so it must call the
+  // *current* toggle via a ref — otherwise F6 fires the initial render's
+  // closure and sends stale config (e.g. action="click" after you picked Hold).
+  const toggleRef = useRef<() => void>(() => {});
   const rootRef = useRef<HTMLDivElement>(null);
   // Remember the last key so toggling Hold target Mouse→Key restores it.
   const lastHoldKey = useRef<string>(saved.holdKey ?? "W");
@@ -154,7 +161,8 @@ export default function App() {
         else setPhase("idle");
       })
     );
-    unlistens.push(listen("hotkey:toggle", () => toggle()));
+    unlistens.push(listen<string>("engine:error", (e) => setEngineError(e.payload)));
+    unlistens.push(listen("hotkey:toggle", () => toggleRef.current()));
     unlistens.push(listen<string>("hotkey:bound", (e) => setHotkey(e.payload)));
     unlistens.push(listen("hotkey:unbound", () => setHotkey(null)));
     unlistens.push(
@@ -196,6 +204,7 @@ export default function App() {
 
   // ---- actions ----
   async function start() {
+    setEngineError(null);
     const config = {
       intervalMs,
       button,
@@ -217,6 +226,8 @@ export default function App() {
     if (phaseRef.current === "idle") start();
     else stop();
   }
+  // Keep the hotkey listener's indirection pointed at this render's toggle.
+  toggleRef.current = toggle;
   function pickPoint() {
     invoke("pick_point").catch(() => {});
   }
@@ -586,6 +597,16 @@ export default function App() {
           </div>
         )}
       </div>
+      )}
+
+      {engineError && (
+        <div className="toast err">
+          <div className="t">
+            Couldn&apos;t click
+            <small>{engineError}</small>
+          </div>
+          <button onClick={() => setEngineError(null)}>Dismiss</button>
+        </div>
       )}
 
       {update && (
