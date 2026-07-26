@@ -618,6 +618,9 @@ export default function App() {
           <button
             onClick={async () => {
               await update.obj.downloadAndInstall();
+              // One real update left the AppImage non-executable and the
+              // relaunch dead; re-assert the bit before relaunching.
+              await invoke("ensure_self_executable").catch(() => {});
               const { relaunch } = await import("@tauri-apps/plugin-process");
               await relaunch();
             }}

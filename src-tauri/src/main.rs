@@ -261,6 +261,28 @@ fn hotkey_status() -> Option<String> {
     portal_hotkey::HOTKEY.lock().unwrap().clone()
 }
 
+/// Re-assert the exec bit on the AppImage we run from. The updater plugin
+/// preserves permissions in every reproduction we ran, yet one real
+/// 0.1.5→0.1.6 update ended with a non-executable file and a relaunch dying
+/// on EACCES (cause never reproduced). Asserting the bit costs nothing and
+/// makes the failure mode impossible. Called at startup and by the UI right
+/// after an update installs, before relaunch.
+#[tauri::command]
+fn ensure_self_executable() {
+    use std::os::unix::fs::PermissionsExt;
+    let Some(path) = std::env::var_os("APPIMAGE") else { return };
+    let path = std::path::PathBuf::from(path);
+    let Ok(meta) = std::fs::metadata(&path) else { return };
+    let mut perms = meta.permissions();
+    if perms.mode() & 0o111 != 0o111 {
+        perms.set_mode(0o755);
+        match std::fs::set_permissions(&path, perms) {
+            Ok(()) => eprintln!("[wayclick] restored missing exec bit on {}", path.display()),
+            Err(e) => eprintln!("[wayclick] could not restore exec bit on {}: {e}", path.display()),
+        }
+    }
+}
+
 /// First-run permission state for `/dev/uinput`.
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
@@ -436,6 +458,7 @@ fn main() {
             stop,
             is_running,
             hotkey_status,
+            ensure_self_executable,
             open_shortcut_settings,
             access_status,
             grant_access,
@@ -444,6 +467,9 @@ fn main() {
             cancel_pick
         ])
         .setup(|app| {
+            // Self-heal: if we somehow run from a non-executable AppImage,
+            // future launches from the desktop entry would fail.
+            ensure_self_executable();
             // Pre-warm: create the virtual devices in the background so the
             // first toggle doesn't pay the enumeration settle. Silently skipped
             // when /dev/uinput isn't accessible yet (first-run gate).
