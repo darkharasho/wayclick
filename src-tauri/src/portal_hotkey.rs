@@ -32,6 +32,7 @@ pub static HOTKEY: Mutex<Option<String>> = Mutex::new(None);
 /// init. After the re-launch this returns immediately.
 pub fn establish_identity() {
     if std::env::var_os("WAYCLICK_SCOPED").is_some() {
+        exit_with_launcher();
         return; // already relaunched into our identity
     }
 
@@ -46,6 +47,7 @@ pub fn establish_identity() {
         .arg(&exe)
         .args(&args)
         .env("WAYCLICK_SCOPED", "1")
+        .env("WAYCLICK_LAUNCHER_PID", std::process::id().to_string())
         .env("GIO_LAUNCHED_DESKTOP_FILE", &desktop_path)
         .env("WEBKIT_DISABLE_DMABUF_RENDERER", "1")
         .status();
@@ -63,6 +65,30 @@ pub fn establish_identity() {
         .exec();
     eprintln!("[wayclick] identity re-exec failed: {err}");
     std::process::exit(1);
+}
+
+/// The scoped app is a child of the launcher waiting in `establish_identity`,
+/// and outlives it when the launcher is killed — which is how `tauri dev`
+/// restarts the app on every rebuild, leaving stale instances holding virtual
+/// devices and the hotkey. Tie the app's lifetime to the launcher's.
+fn exit_with_launcher() {
+    let Some(launcher) = std::env::var("WAYCLICK_LAUNCHER_PID")
+        .ok()
+        .and_then(|p| p.parse::<libc::pid_t>().ok())
+    else {
+        return;
+    };
+    // Not inherited: an updater relaunch spawns a fresh copy of us that must
+    // not mistake its own parent for a dead launcher.
+    std::env::remove_var("WAYCLICK_LAUNCHER_PID");
+    // SAFETY: plain prctl/getppid syscalls with no pointer arguments.
+    unsafe {
+        libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+        // The launcher may have died before the prctl took effect.
+        if libc::getppid() != launcher {
+            std::process::exit(0);
+        }
+    }
 }
 
 /// Write a user `.desktop` whose basename is the app id (unless a system one

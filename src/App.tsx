@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { LogicalSize } from "@tauri-apps/api/dpi";
@@ -16,7 +16,8 @@ type Access = {
   inGroup: boolean;
 };
 
-const win = getCurrentWindow();
+// null in a plain browser (`npm run dev:web`), where there is no Tauri window.
+const win = isTauri() ? getCurrentWindow() : null;
 
 export default function App() {
   // Persisted settings so config survives restarts.
@@ -50,7 +51,7 @@ export default function App() {
   // Window pinned (always-on-top), persisted and applied to the window.
   const [pinned, setPinned] = useState<boolean>(saved.pinned ?? false);
   useEffect(() => {
-    win.setAlwaysOnTop(pinned).catch(() => {});
+    win?.setAlwaysOnTop(pinned).catch(() => {});
   }, [pinned]);
 
   // Save settings whenever they change.
@@ -135,7 +136,7 @@ export default function App() {
       const h = Math.ceil(el.getBoundingClientRect().height);
       if (h > 0 && Math.abs(h - last) > 1) {
         last = h;
-        win.setSize(new LogicalSize(384, h)).catch(() => {});
+        win?.setSize(new LogicalSize(384, h)).catch(() => {});
       }
     });
     ro.observe(el);
@@ -151,6 +152,7 @@ export default function App() {
 
   // ---- engine status + hotkey wiring ----
   useEffect(() => {
+    if (!win) return;
     const unlistens: Array<Promise<() => void>> = [];
     unlistens.push(
       listen<{ phase: string }>("engine:status", (e) => {
@@ -279,12 +281,12 @@ export default function App() {
               <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z" />
             </svg>
           </button>
-          <button className="tb-btn" title="Minimize" onClick={() => win.minimize()}>
+          <button className="tb-btn" title="Minimize" onClick={() => win?.minimize()}>
             <svg width="11" height="11" viewBox="0 0 11 11">
               <rect x="1" y="5" width="9" height="1.4" fill="currentColor" />
             </svg>
           </button>
-          <button className="tb-btn close" title="Close" onClick={() => win.close()}>
+          <button className="tb-btn close" title="Close" onClick={() => win?.close()}>
             <svg width="11" height="11" viewBox="0 0 11 11">
               <path
                 d="M1 1 L10 10 M10 1 L1 10"

@@ -21,6 +21,7 @@ wayclick-input = { path = "../crates/wayclick-input" }
 # Wayland-native global hotkey via the XDG GlobalShortcuts portal (the OBS path).
 ashpd = { version = "0.9", default-features = false, features = ["tokio"] }
 futures-util = "0.3"
+libc = "0.2"
 
 [features]
 # this feature is used for production builds where `devUrl` is not used

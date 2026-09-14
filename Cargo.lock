@@ -4520,6 +4520,7 @@ version = "0.1.7"
 dependencies = [
  "ashpd",
  "futures-util",
+ "libc",
  "serde",
  "serde_json",
  "tauri",
