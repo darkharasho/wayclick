@@ -102,28 +102,68 @@ fn ensure_desktop_file() -> std::path::PathBuf {
     let exec = std::env::var("APPIMAGE")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::current_exe().unwrap_or_default());
-    let apps_dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
-        .join(".local/share/applications");
+    let data_dir = std::path::PathBuf::from(std::env::var_os("HOME").unwrap_or_default())
+        .join(".local/share");
+    let apps_dir = data_dir.join("applications");
     let user = apps_dir.join(format!("{APP_ID}.desktop"));
 
-    let needs_write = !user.exists()
-        || (std::env::var("APPIMAGE").is_ok()
-            && !std::fs::read_to_string(&user)
-                .unwrap_or_default()
-                .contains(exec.to_string_lossy().as_ref()));
-    if needs_write {
-        let content = format!(
-            "[Desktop Entry]\nName=wayclick\n\
-             Comment=A sleek, minimal autoclicker for Wayland\n\
-             Exec={exec}\nIcon={APP_ID}\nType=Application\n\
-             Categories=Utility;\nStartupNotify=false\n",
-            exec = exec.display()
-        );
-        if std::fs::create_dir_all(&apps_dir).is_ok() {
-            let _ = std::fs::write(&user, &content);
-        }
+    // The theme icon name below must resolve, or menus show a blank icon.
+    let icon_dir = data_dir.join("icons/hicolor/256x256/apps");
+    let icon = icon_dir.join(format!("{APP_ID}.png"));
+    const ICON: &[u8] = include_bytes!("../icons/128x128@2x.png");
+    if std::fs::read(&icon).ok().as_deref() != Some(ICON) && std::fs::create_dir_all(&icon_dir).is_ok() {
+        let _ = std::fs::write(&icon, ICON);
+    }
+
+    // If an AppImage manager (Gear Lever, AppImageLauncher) already put this
+    // binary in the menu, stay hidden so there aren't two entries.
+    let no_display = launched_by_other_entry(&apps_dir, &user, &exec);
+    let content = format!(
+        "[Desktop Entry]\nName=wayclick\n\
+         Comment=A sleek, minimal autoclicker for Wayland\n\
+         Exec={exec}\nIcon={APP_ID}\nType=Application\n\
+         Categories=Utility;\nStartupNotify=false\nStartupWMClass=wayclick\n\
+         NoDisplay={no_display}\n",
+        exec = exec.display()
+    );
+    if std::fs::read_to_string(&user).ok().as_deref() != Some(content.as_str())
+        && std::fs::create_dir_all(&apps_dir).is_ok()
+    {
+        let _ = std::fs::write(&user, &content);
     }
     user
+}
+
+/// Whether some other visible `.desktop` in `apps_dir` launches `exec`.
+fn launched_by_other_entry(
+    apps_dir: &std::path::Path,
+    ours: &std::path::Path,
+    exec: &std::path::Path,
+) -> bool {
+    // Canonicalize both sides: on Fedora Atomic /home is a symlink to /var/home.
+    let Ok(exec) = exec.canonicalize() else { return false };
+    let Ok(entries) = std::fs::read_dir(apps_dir) else { return false };
+    entries.flatten().any(|entry| {
+        let path = entry.path();
+        if path == ours || path.extension().is_none_or(|e| e != "desktop") {
+            return false;
+        }
+        let Ok(text) = std::fs::read_to_string(&path) else { return false };
+        let mut launches = false;
+        let mut hidden = false;
+        for line in text.lines().map(str::trim) {
+            if line.starts_with('[') && line != "[Desktop Entry]" {
+                break; // stop at [Desktop Action ...] groups
+            }
+            if let Some(cmd) = line.strip_prefix("Exec=") {
+                let program = cmd.trim_start_matches('"').split(['"', ' ']).next().unwrap_or("");
+                launches = std::path::Path::new(program).canonicalize().is_ok_and(|p| p == exec);
+            } else if line == "NoDisplay=true" || line == "Hidden=true" {
+                hidden = true;
+            }
+        }
+        launches && !hidden
+    })
 }
 
 /// Run the portal session for the lifetime of the app: bind a "toggle" shortcut
