@@ -20,6 +20,7 @@ use std::{
 
 use crate::{
     error::Result,
+    keyboard::{Keycode, VirtualKeyboard},
     mouse::{MouseButton, VirtualMouse},
     positioner::PointerPositioner,
 };
@@ -51,6 +52,9 @@ pub enum Target {
 #[derive(Debug, Clone, Copy)]
 pub struct ClickConfig {
     pub button: MouseButton,
+    /// When set, each tick taps this key instead of clicking `button`, and
+    /// `target` is ignored. Requires [`ClickEngine::with_keyboard`].
+    pub key: Option<Keycode>,
     pub kind: ClickKind,
     /// Base delay between ticks.
     pub interval: Duration,
@@ -71,6 +75,7 @@ impl Default for ClickConfig {
     fn default() -> Self {
         Self {
             button: MouseButton::Left,
+            key: None,
             kind: ClickKind::Single,
             interval: Duration::from_millis(100),
             jitter: Duration::ZERO,
@@ -142,28 +147,44 @@ pub fn should_continue(repeat: Repeat, done: u64) -> bool {
     }
 }
 
-/// The autoclicker. Holds the device; positioning is optional (only needed for
-/// `Target::Fixed`).
+/// The autoclicker. Holds the devices; positioning is optional (only needed for
+/// `Target::Fixed`), and so is the keyboard (only needed for key taps).
 pub struct ClickEngine<'a, P: PointerPositioner> {
     mouse: &'a VirtualMouse,
     positioner: Option<&'a P>,
+    keyboard: Option<&'a VirtualKeyboard>,
 }
 
 impl<'a, P: PointerPositioner> ClickEngine<'a, P> {
     pub fn new(mouse: &'a VirtualMouse, positioner: Option<&'a P>) -> Self {
-        Self { mouse, positioner }
+        Self { mouse, positioner, keyboard: None }
+    }
+
+    pub fn with_keyboard(mut self, keyboard: &'a VirtualKeyboard) -> Self {
+        self.keyboard = Some(keyboard);
+        self
+    }
+
+    fn press_once(&self, cfg: &ClickConfig) -> Result<()> {
+        match cfg.key {
+            Some(k) => self
+                .keyboard
+                .expect("key taps require a keyboard")
+                .tap(k, cfg.hold),
+            // Press-hold-release with a real hold window. KWin only registers a
+            // click while the pointer is *moving* if press and release are
+            // separated by a non-trivial hold (~30ms+); a zero-duration atomic
+            // tap is silently dropped during motion. So the follow-cursor "click
+            // while moving" case requires `cfg.hold` to stay above that threshold.
+            None => self.mouse.click(cfg.button, cfg.hold),
+        }
     }
 
     fn one_click(&self, cfg: &ClickConfig) -> Result<()> {
-        // Press-hold-release with a real hold window. KWin only registers a click
-        // while the pointer is *moving* if press and release are separated by a
-        // non-trivial hold (~30ms+); a zero-duration atomic tap is silently
-        // dropped during motion. So the follow-cursor "click while moving" case
-        // requires `cfg.hold` to stay above that threshold.
-        self.mouse.click(cfg.button, cfg.hold)?;
+        self.press_once(cfg)?;
         if cfg.kind == ClickKind::Double {
             sleep(cfg.double_gap);
-            self.mouse.click(cfg.button, cfg.hold)?;
+            self.press_once(cfg)?;
         }
         Ok(())
     }
@@ -172,11 +193,12 @@ impl<'a, P: PointerPositioner> ClickEngine<'a, P> {
     /// jitter RNG (pass a time-derived value from the caller).
     pub fn run(&self, cfg: &ClickConfig, stop: &StopFlag, seed: u64) -> Result<u64> {
         let mut rng = Rng::new(seed);
+        let positioned = cfg.key.is_none();
 
         // Fixed-position: assert the target once up front (clicks don't move the
         // pointer, so it stays put). Follow-cursor clicks wherever the pointer
         // already is, so it needs no positioning.
-        if let Target::Fixed { x, y } = cfg.target {
+        if let (true, Target::Fixed { x, y }) = (positioned, cfg.target) {
             let p = self.positioner.expect("fixed target requires a positioner");
             p.move_to(x, y)?;
         }
@@ -188,7 +210,7 @@ impl<'a, P: PointerPositioner> ClickEngine<'a, P> {
         let mut done: u64 = 0;
         let mut next_tick = Instant::now();
         while should_continue(cfg.repeat, done) && !stop.is_stopped() {
-            if cfg.reposition_each_click {
+            if positioned && cfg.reposition_each_click {
                 if let Target::Fixed { x, y } = cfg.target {
                     self.positioner.unwrap().move_to(x, y)?;
                 }

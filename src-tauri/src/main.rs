@@ -30,7 +30,7 @@ struct RunConfig {
     button: String,
     action: String,     // "click" | "hold"
     click_kind: String, // "single" | "double"
-    hold_key: Option<String>,
+    key: Option<String>, // None = mouse button
     repeat: Option<u64>,      // None = infinite
     position: Option<[i32; 2]>, // None = follow cursor
     jitter_ms: u64,
@@ -120,9 +120,10 @@ fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle, inner: Arc<Inner>)
         let devices = get_or_create_devices(&inner)?;
         let mouse = &devices.mouse;
         emit_status(&app, "running");
+        let key = cfg.key.as_deref().and_then(Keycode::from_name);
 
         if cfg.action == "hold" {
-            match cfg.hold_key.as_deref().and_then(Keycode::from_name) {
+            match key {
                 // Mouse-button hold.
                 None => {
                     let b = button_from(&cfg.button);
@@ -160,6 +161,7 @@ fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle, inner: Arc<Inner>)
         // Click action.
         let click_cfg = ClickConfig {
             button: button_from(&cfg.button),
+            key,
             kind: if cfg.click_kind == "double" { ClickKind::Double } else { ClickKind::Single },
             interval: Duration::from_millis(cfg.interval_ms),
             jitter: Duration::from_millis(cfg.jitter_ms),
@@ -174,17 +176,18 @@ fn run_worker(cfg: RunConfig, stop: StopFlag, app: AppHandle, inner: Arc<Inner>)
             reposition_each_click: cfg.reposition_each_click,
         };
         // The KWin cursor reader is only needed to reach a fixed target;
-        // follow-cursor runs on any compositor.
-        let done = match cfg.position {
-            Some(_) => {
+        // follow-cursor and key taps run on any compositor.
+        let done = match (cfg.position, key) {
+            (Some(_), None) => {
                 let reader = KwinCursorReader::new()?;
                 let positioner = ClosedLoopPositioner::new(mouse, &reader);
                 ClickEngine::new(mouse, Some(&positioner)).run(&click_cfg, &stop, seed())?
             }
-            None => ClickEngine::<ClosedLoopPositioner<KwinCursorReader>>::new(mouse, None)
+            _ => ClickEngine::<ClosedLoopPositioner<KwinCursorReader>>::new(mouse, None)
+                .with_keyboard(&devices.keyboard)
                 .run(&click_cfg, &stop, seed())?,
         };
-        if done > 0 {
+        if done > 0 && key.is_none() {
             inner.warmed.store(true, Ordering::Relaxed);
         }
         Ok(())

@@ -37,11 +37,11 @@ export default function App() {
   const [button, setButton] = useState<Button>(saved.button ?? "left");
   const [action, setAction] = useState<Action>(saved.action ?? "click");
   const [doubleClick, setDoubleClick] = useState<boolean>(saved.doubleClick ?? false);
-  // null is a real value here (Mouse mode), so only default when truly absent —
-  // `?? "W"` would turn a saved Mouse selection back into holding W.
-  const [holdKey, setHoldKey] = useState<string | null>(
-    saved.holdKey === undefined ? "W" : saved.holdKey
-  );
+  // The key to press, or null to use a mouse button. null is a real value, so
+  // only default when truly absent — `?? "W"` would turn a saved Mouse selection
+  // back into W. `holdKey` is the pre-0.1.8 name, from when only Hold had keys.
+  const savedKey = saved.key !== undefined ? saved.key : saved.holdKey;
+  const [key, setKey] = useState<string | null>(savedKey === undefined ? "W" : savedKey);
 
   const [repeatCount, setRepeatCount] = useState<number | null>(saved.repeatCount ?? null);
   const [fixed, setFixed] = useState<[number, number] | null>(saved.fixed ?? null);
@@ -58,11 +58,11 @@ export default function App() {
     localStorage.setItem(
       "wc.config",
       JSON.stringify({
-        hr, min, sec, ms, button, action, doubleClick, holdKey,
+        hr, min, sec, ms, button, action, doubleClick, key,
         repeatCount, fixed, jitter, pinned,
       })
     );
-  }, [hr, min, sec, ms, button, action, doubleClick, holdKey, repeatCount, fixed, jitter, pinned]);
+  }, [hr, min, sec, ms, button, action, doubleClick, key, repeatCount, fixed, jitter, pinned]);
 
   // Collapse states persist so a configured widget stays compact across runs.
   const [settingsOpen, setSettingsOpen] = useState(
@@ -119,11 +119,11 @@ export default function App() {
   // closure and sends stale config (e.g. action="click" after you picked Hold).
   const toggleRef = useRef<() => void>(() => {});
   const rootRef = useRef<HTMLDivElement>(null);
-  // Remember the last key so toggling Hold target Mouse→Key restores it.
-  const lastHoldKey = useRef<string>(saved.holdKey ?? "W");
+  // Remember the last key so toggling Mouse→Key restores it.
+  const lastKey = useRef<string>(savedKey ?? "W");
   useEffect(() => {
-    if (holdKey) lastHoldKey.current = holdKey;
-  }, [holdKey]);
+    if (key) lastKey.current = key;
+  }, [key]);
 
   // Grow/shrink the window to fit content (Advanced, Hold rows, etc.) so nothing
   // clips and there's no inner scrollbar.
@@ -174,14 +174,14 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ---- key capture (hold key / hotkey rebind) ----
+  // ---- key capture ----
   useEffect(() => {
     if (!capturing) return;
     const handler = (e: KeyboardEvent) => {
       e.preventDefault();
       const name = codeToKeyName(e);
       if (name) {
-        setHoldKey(name);
+        setKey(name);
         setCapturing(null);
       }
     };
@@ -210,7 +210,7 @@ export default function App() {
       button,
       action,
       clickKind: doubleClick ? "double" : "single",
-      holdKey: action === "hold" ? holdKey : null,
+      key,
       repeat: repeatCount,
       position: fixed,
       jitterMs: jitter,
@@ -237,11 +237,11 @@ export default function App() {
   // Compact "what's selected" summaries shown in each disclosure when collapsed.
   const settingsSummary =
     action === "hold"
-      ? `hold ${holdKey ?? button}`
-      : `${intervalMs} ms · ${button} · ${doubleClick ? "double" : "single"}`;
+      ? `hold ${key ?? button}`
+      : `${intervalMs} ms · ${key ?? button} · ${doubleClick ? "double" : "single"}`;
   const advancedSummary = [
     repeatCount == null ? "until stopped" : `${repeatCount}×`,
-    fixed ? `fixed ${fixed[0]},${fixed[1]}` : "follow cursor",
+    key ? null : fixed ? `fixed ${fixed[0]},${fixed[1]}` : "follow cursor",
     action === "click" && jitter ? `±${jitter}ms` : null,
   ]
     .filter(Boolean)
@@ -321,13 +321,13 @@ export default function App() {
             {action === "hold" ? (
               <>
                 <div className="big">
-                  <span className="kc">{holdKey ?? button}</span>
+                  <span className="kc">{key ?? button}</span>
                   <span className="lab">held down</span>
                 </div>
                 <div className="sub">
                   target
                   <br />
-                  <b>{holdKey ? "key" : "mouse"}</b>
+                  <b>{key ? "key" : "mouse"}</b>
                 </div>
               </>
             ) : (
@@ -370,6 +370,58 @@ export default function App() {
 
         {settingsOpen && (
         <div className="list">
+          <Seg
+            label="Action"
+            hint="press repeatedly, or hold down"
+            value={action}
+            onChange={(v) => setAction(v as Action)}
+            options={[
+              ["click", "Repeat"],
+              ["hold", "Hold"],
+            ]}
+          />
+
+          <div className="row">
+            <div className="nm">
+              Input
+              <small>a key, or a mouse button</small>
+            </div>
+            <div className="seg">
+              <button className={key !== null ? "on" : ""} onClick={() => setKey(lastKey.current)}>
+                Key
+              </button>
+              <button className={key === null ? "on" : ""} onClick={() => setKey(null)}>
+                Mouse
+              </button>
+            </div>
+          </div>
+
+          {key !== null ? (
+            <div className="row">
+              <div className="nm">Key</div>
+              <div className="pick">
+                <span className="kc">{key}</span>
+                <button
+                  className={"setk" + (capturing === "key" ? " capturing" : "")}
+                  onClick={() => setCapturing("key")}
+                >
+                  {capturing === "key" ? "press a key…" : "Set key"}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <Seg
+              label="Button"
+              value={button}
+              onChange={(v) => setButton(v as Button)}
+              options={[
+                ["left", "Left"],
+                ["middle", "Mid"],
+                ["right", "Right"],
+              ]}
+            />
+          )}
+
           {action === "click" && (
             <div className="row">
               <div className="nm">Interval</div>
@@ -396,82 +448,7 @@ export default function App() {
 
           {action === "click" && (
             <Seg
-              label="Button"
-              value={button}
-              onChange={(v) => setButton(v as Button)}
-              options={[
-                ["left", "Left"],
-                ["middle", "Mid"],
-                ["right", "Right"],
-              ]}
-            />
-          )}
-
-          <Seg
-            label="Action"
-            hint="click, or hold a key down"
-            value={action}
-            onChange={(v) => setAction(v as Action)}
-            options={[
-              ["click", "Click"],
-              ["hold", "Hold"],
-            ]}
-          />
-
-          {action === "hold" && (
-            <>
-              <div className="row">
-                <div className="nm">
-                  Hold
-                  <small>a key, or a mouse button</small>
-                </div>
-                <div className="seg">
-                  <button
-                    className={holdKey !== null ? "on" : ""}
-                    onClick={() => setHoldKey(lastHoldKey.current)}
-                  >
-                    Key
-                  </button>
-                  <button
-                    className={holdKey === null ? "on" : ""}
-                    onClick={() => setHoldKey(null)}
-                  >
-                    Mouse
-                  </button>
-                </div>
-              </div>
-
-              {holdKey !== null ? (
-                <div className="row">
-                  <div className="nm">Key</div>
-                  <div className="pick">
-                    <span className="kc">{holdKey}</span>
-                    <button
-                      className={"setk" + (capturing === "key" ? " capturing" : "")}
-                      onClick={() => setCapturing("key")}
-                    >
-                      {capturing === "key" ? "press a key…" : "Set key"}
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <Seg
-                  label="Button"
-                  value={button}
-                  onChange={(v) => setButton(v as Button)}
-                  options={[
-                    ["left", "Left"],
-                    ["middle", "Mid"],
-                    ["right", "Right"],
-                  ]}
-                />
-              )}
-            </>
-          )}
-
-          {action === "click" && (
-            <Seg
-              label="Click"
+              label={key ? "Press" : "Click"}
               value={doubleClick ? "double" : "single"}
               onChange={(v) => setDoubleClick(v === "double")}
               options={[
@@ -499,7 +476,7 @@ export default function App() {
             {action === "click" && (
               <Seg
                 label="Repeat"
-                hint="how many clicks"
+                hint={key ? "how many presses" : "how many clicks"}
                 value={repeatCount == null ? "inf" : "count"}
                 onChange={(v) => setRepeatCount(v === "inf" ? null : 100)}
                 options={[
@@ -521,12 +498,13 @@ export default function App() {
                         )
                       }
                     />
-                    <u>clicks</u>
+                    <u>{key ? "presses" : "clicks"}</u>
                   </div>
                 </div>
               </div>
             )}
 
+            {key === null && (
             <div className="row">
               <div className="nm">
                 Position
@@ -551,6 +529,7 @@ export default function App() {
                 )}
               </div>
             </div>
+            )}
 
             {action === "click" && (
               <div className="row">
